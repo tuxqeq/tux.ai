@@ -53,6 +53,7 @@ models/*/checkpoint-*/
 data/train_data_large.json
 data/*.json
 *.txt
+!requirements.txt
 large_data.txt
 large_data_encrypted.txt
 

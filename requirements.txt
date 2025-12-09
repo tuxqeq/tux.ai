@@ -1,0 +1,14 @@
+torch
+transformers
+datasets
+scikit-learn
+faker
+seqeval
+pandas
+numpy
+tqdm
+evaluate
+accelerate
+presidio-analyzer
+presidio-anonymizer
+spacy

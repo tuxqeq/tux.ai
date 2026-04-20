@@ -49,6 +49,12 @@ models/*/checkpoint-*/
 *.bin
 *.onnx
 
+# Input/output test data
+input/*
+!input/.gitkeep
+output/*
+!output/.gitkeep
+
 # Large data files
 data/train_data_large.json
 data/*.json

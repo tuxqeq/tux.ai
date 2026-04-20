@@ -1,16 +1,56 @@
 import argparse
 import json
 import random
+import re
 from faker import Faker
 from tqdm import tqdm
 import os
 
+fake = Faker()
+
+KEY_TO_LABEL = {
+    "name": "PER", "address": "LOC", "company": "ORG",
+    "email": "EMAIL", "phone_number": "PHONE", "ssn": "SSN",
+    "credit_card_number": "CREDIT_CARD", "dob": "DOB",
+    "license": "LICENSE", "passport": "PASSPORT",
+    "ip_address": "IP_ADDRESS", "mrn": "MRN",
+    "bank_account": "BANK_ACCOUNT", "username": "USERNAME",
+    "vin": "VIN", "api_key": "API_KEY",
+    "mac_address": "MAC", "emp_id": "EMP_ID",
+    "insurance": "INSURANCE",
+}
+
+_VIN_CHARS = list("ABCDEFGHJKLMNPRSTUVWXYZ0123456789")
+
+
+def make_value(key: str) -> str:
+    generators = {
+        "name":               lambda: fake.name(),
+        "email":              lambda: fake.email(),
+        "address":            lambda: fake.address().replace("\n", ", "),
+        "phone_number":       lambda: fake.phone_number(),
+        "credit_card_number": lambda: fake.credit_card_number(),
+        "ssn":                lambda: fake.ssn(),
+        "company":            lambda: fake.company(),
+        "dob":                lambda: fake.date_of_birth().strftime("%m/%d/%Y"),
+        "license":            lambda: f"{fake.random_uppercase_letter()}{fake.random_int(min=1000000, max=9999999)}",
+        "passport":           lambda: str(fake.random_int(min=100000000, max=999999999)),
+        "ip_address":         lambda: fake.ipv4(),
+        "mrn":                lambda: f"MRN-{fake.random_int(min=100000, max=999999)}",
+        "bank_account":       lambda: str(fake.random_int(min=10000000000, max=99999999999)),
+        "username":           lambda: fake.user_name(),
+        "vin":                lambda: "".join(fake.random_choices(elements=_VIN_CHARS, length=17)),
+        "api_key":            lambda: "sk_live_" + fake.lexify("?" * 32, letters="abcdefghijklmnopqrstuvwxyz0123456789"),
+        "mac_address":        lambda: ":".join(f"{fake.random_int(0, 255):02X}" for _ in range(6)),
+        "emp_id":             lambda: f"EMP-{fake.random_int(min=1000, max=9999)}",
+        "insurance":          lambda: f"POL{fake.random_int(min=100000, max=999999)}",
+    }
+    return generators[key]() if key in generators else key
+
+
 def generate_data(count, output_file):
-    fake = Faker()
     data = []
-    
-    # Define templates with placeholders for PII
-    # Comprehensive templates covering many PII types and contexts
+
     templates = [
         # ===== NAMES (Person) =====
         ("My name is {name}.", ["name"]),
@@ -39,7 +79,12 @@ def generate_data(count, output_file):
         ("Reply to {email} with the details.", ["email"]),
         ("Forward this to {email}.", ["email"]),
         ("Email address on file: {email}", ["email"]),
-        
+        ("Notification sent to {email}.", ["email"]),
+        ("Please verify {email} to continue.", ["email"]),
+        ("Primary contact email: {email}", ["email"]),
+        ("CC {email} on this thread.", ["email"]),
+        ("Registration confirmed for {email}.", ["email"]),
+
         # ===== PHONE NUMBERS =====
         ("Call me at {phone_number}.", ["phone_number"]),
         ("My phone number is {phone_number}.", ["phone_number"]),
@@ -48,21 +93,36 @@ def generate_data(count, output_file):
         ("Call {phone_number} for support.", ["phone_number"]),
         ("Mobile: {phone_number}", ["phone_number"]),
         ("Office phone: {phone_number}", ["phone_number"]),
-        
+        ("Emergency contact: {phone_number}", ["phone_number"]),
+        ("Text us at {phone_number}.", ["phone_number"]),
+        ("Fax number: {phone_number}", ["phone_number"]),
+        ("Direct line: {phone_number}", ["phone_number"]),
+        ("Callback number is {phone_number}.", ["phone_number"]),
+
         # ===== SSN =====
         ("His SSN is {ssn}.", ["ssn"]),
         ("Social Security Number: {ssn}", ["ssn"]),
         ("Patient SSN {ssn} was verified.", ["ssn"]),
         ("SSN on file: {ssn}", ["ssn"]),
         ("Tax ID {ssn} confirmed.", ["ssn"]),
-        
+        ("Please provide SSN {ssn} for enrollment.", ["ssn"]),
+        ("SSN verification required: {ssn}", ["ssn"]),
+        ("Social security {ssn} matched.", ["ssn"]),
+        ("Identity confirmed via SSN {ssn}.", ["ssn"]),
+        ("SSN {ssn} linked to account.", ["ssn"]),
+
         # ===== CREDIT CARDS =====
         ("My credit card number is {credit_card_number}.", ["credit_card_number"]),
         ("Card ending in {credit_card_number}.", ["credit_card_number"]),
         ("Payment via card {credit_card_number}.", ["credit_card_number"]),
         ("Credit card {credit_card_number} authorized.", ["credit_card_number"]),
         ("Charge to card {credit_card_number}.", ["credit_card_number"]),
-        
+        ("Transaction declined for {credit_card_number}.", ["credit_card_number"]),
+        ("Please verify card number {credit_card_number}.", ["credit_card_number"]),
+        ("Refund issued to {credit_card_number}.", ["credit_card_number"]),
+        ("Card on file: {credit_card_number}", ["credit_card_number"]),
+        ("Billing card {credit_card_number} updated.", ["credit_card_number"]),
+
         # ===== ADDRESSES =====
         ("I live at {address}.", ["address"]),
         ("Send the package to {address}.", ["address"]),
@@ -70,55 +130,154 @@ def generate_data(count, output_file):
         ("Mailing address is {address}.", ["address"]),
         ("Shipping to {address}.", ["address"]),
         ("Office located at {address}.", ["address"]),
-        
+        ("Billing address: {address}", ["address"]),
+        ("Return to sender at {address}.", ["address"]),
+        ("Current residence: {address}", ["address"]),
+        ("Physical address on record: {address}", ["address"]),
+        ("Please update your address to {address}.", ["address"]),
+        ("Home address confirmed as {address}.", ["address"]),
+
         # ===== COMPANIES/ORGANIZATIONS =====
         ("I work at {company}.", ["company"]),
         ("{company} announced new policies today.", ["company"]),
         ("The contract with {company} was signed.", ["company"]),
         ("Partnership with {company} established.", ["company"]),
         ("{company} is our main client.", ["company"]),
-        
+        ("Invoice issued to {company}.", ["company"]),
+        ("{company} submitted the bid.", ["company"]),
+        ("Merger with {company} approved.", ["company"]),
+        ("Vendor: {company}", ["company"]),
+        ("Employer: {company}", ["company"]),
+
         # ===== DATES OF BIRTH =====
         ("Date of birth: {dob}", ["dob"]),
         ("Born on {dob}.", ["dob"]),
         ("DOB: {dob}", ["dob"]),
         ("Patient birthdate {dob}.", ["dob"]),
-        
+        ("Date of birth on file: {dob}", ["dob"]),
+        ("DOB confirmed as {dob}.", ["dob"]),
+        ("Age verified, born {dob}.", ["dob"]),
+        ("Birth date {dob} recorded.", ["dob"]),
+        ("Member since birth on {dob}.", ["dob"]),
+        ("Identity verified, DOB {dob}.", ["dob"]),
+
         # ===== DRIVER LICENSE =====
         ("Driver license number: {license}", ["license"]),
         ("DL: {license}", ["license"]),
         ("License ID {license} verified.", ["license"]),
-        
+        ("State license {license} on file.", ["license"]),
+        ("Operator license {license} scanned.", ["license"]),
+        ("DL number {license} confirmed.", ["license"]),
+        ("Driver ID: {license}", ["license"]),
+        ("License plate linked to DL {license}.", ["license"]),
+        ("Submitted driver license {license}.", ["license"]),
+        ("License {license} expires this year.", ["license"]),
+
         # ===== PASSPORT =====
         ("Passport number: {passport}", ["passport"]),
         ("Passport {passport} expires next year.", ["passport"]),
-        
+        ("Travel document passport {passport}.", ["passport"]),
+        ("Visa application attached to passport {passport}.", ["passport"]),
+        ("Passport ID: {passport}", ["passport"]),
+        ("International travel with passport {passport}.", ["passport"]),
+        ("Passport {passport} renewed.", ["passport"]),
+        ("Border control scanned passport {passport}.", ["passport"]),
+
         # ===== IP ADDRESSES =====
         ("Server IP: {ip_address}", ["ip_address"]),
         ("Connect to {ip_address}.", ["ip_address"]),
         ("IP address {ip_address} blocked.", ["ip_address"]),
-        
+        ("Login from IP {ip_address}.", ["ip_address"]),
+        ("Request origin: {ip_address}", ["ip_address"]),
+        ("Firewall blocked {ip_address}.", ["ip_address"]),
+        ("Remote host {ip_address} connected.", ["ip_address"]),
+        ("Access granted to {ip_address}.", ["ip_address"]),
+
         # ===== MEDICAL RECORD NUMBERS =====
         ("Medical record number {mrn}.", ["mrn"]),
         ("MRN: {mrn}", ["mrn"]),
         ("Patient MRN {mrn} accessed.", ["mrn"]),
-        
+        ("Chart pulled for {mrn}.", ["mrn"]),
+        ("Discharge summary for {mrn} filed.", ["mrn"]),
+        ("Lab results under {mrn}.", ["mrn"]),
+        ("Referral created for patient {mrn}.", ["mrn"]),
+        ("Record {mrn} updated in EMR.", ["mrn"]),
+
         # ===== BANK ACCOUNTS =====
         ("Account number: {bank_account}", ["bank_account"]),
         ("Bank account {bank_account}.", ["bank_account"]),
         ("Transfer to account {bank_account}.", ["bank_account"]),
-        
+        ("Direct deposit to {bank_account}.", ["bank_account"]),
+        ("ACH routing sent to {bank_account}.", ["bank_account"]),
+        ("Savings account: {bank_account}", ["bank_account"]),
+        ("Linked bank account {bank_account}.", ["bank_account"]),
+        ("Wire transfer to {bank_account} completed.", ["bank_account"]),
+
         # ===== USERNAMES =====
         ("Username: {username}", ["username"]),
         ("Login as {username}.", ["username"]),
         ("User {username} logged in.", ["username"]),
-        
+        ("Account {username} suspended.", ["username"]),
+        ("Password reset for {username}.", ["username"]),
+        ("Profile: {username}", ["username"]),
+        ("Admin user {username} created.", ["username"]),
+        ("{username} updated their settings.", ["username"]),
+        ("Session started for {username}.", ["username"]),
+        ("Two-factor enabled for {username}.", ["username"]),
+
+        # ===== VIN =====
+        ("Vehicle VIN: {vin}", ["vin"]),
+        ("VIN number {vin} registered.", ["vin"]),
+        ("Car with VIN {vin} recalled.", ["vin"]),
+        ("Registration for VIN {vin} expired.", ["vin"]),
+        ("Insurance linked to VIN {vin}.", ["vin"]),
+        ("Odometer reading for {vin}.", ["vin"]),
+        ("Title transfer for VIN {vin}.", ["vin"]),
+        ("Dealer submitted VIN {vin} for inspection.", ["vin"]),
+
+        # ===== API KEYS =====
+        ("API key: {api_key}", ["api_key"]),
+        ("Use token {api_key} for authentication.", ["api_key"]),
+        ("Secret key {api_key} rotated.", ["api_key"]),
+        ("Authorization header: Bearer {api_key}", ["api_key"]),
+        ("Service token: {api_key}", ["api_key"]),
+        ("Access token issued: {api_key}", ["api_key"]),
+        ("API_KEY={api_key}", ["api_key"]),
+        ("Revoke key {api_key} immediately.", ["api_key"]),
+
+        # ===== MAC ADDRESSES =====
+        ("Device MAC address: {mac_address}", ["mac_address"]),
+        ("Hardware address {mac_address} registered.", ["mac_address"]),
+        ("MAC {mac_address} blocked on firewall.", ["mac_address"]),
+        ("Network card MAC: {mac_address}", ["mac_address"]),
+        ("DHCP lease for {mac_address}.", ["mac_address"]),
+        ("Access point detected {mac_address}.", ["mac_address"]),
+
+        # ===== EMPLOYEE IDs =====
+        ("Employee ID: {emp_id}", ["emp_id"]),
+        ("Staff member {emp_id} checked in.", ["emp_id"]),
+        ("Payroll for {emp_id} processed.", ["emp_id"]),
+        ("Badge {emp_id} deactivated.", ["emp_id"]),
+        ("HR file for {emp_id} updated.", ["emp_id"]),
+        ("Employee {emp_id} submitted timesheet.", ["emp_id"]),
+
+        # ===== INSURANCE NUMBERS =====
+        ("Insurance policy: {insurance}", ["insurance"]),
+        ("Policy number {insurance} active.", ["insurance"]),
+        ("Claim filed under policy {insurance}.", ["insurance"]),
+        ("Coverage verified for {insurance}.", ["insurance"]),
+        ("Renewal notice for policy {insurance}.", ["insurance"]),
+        ("Premium for {insurance} due.", ["insurance"]),
+
         # ===== MIXED/COMPLEX PATTERNS =====
         ("{name} lives at {address}.", ["name", "address"]),
         ("Contact {name} at {email} or {phone_number}.", ["name", "email", "phone_number"]),
         ("{name} from {company} called from {phone_number}.", ["name", "company", "phone_number"]),
         ("Patient {name}, DOB {dob}, SSN {ssn}.", ["name", "dob", "ssn"]),
         ("{name} works at {company} and can be reached at {email}.", ["name", "company", "email"]),
+        ("User {username} logged in from IP {ip_address}.", ["username", "ip_address"]),
+        ("Vehicle VIN {vin} owned by {name}.", ["vin", "name"]),
+        ("Employee {emp_id} {name} has email {email}.", ["emp_id", "name", "email"]),
         
         # ===== NEGATIVE SAMPLES (No PII) - CRITICAL! =====
         ("Hello world.", []),
@@ -194,229 +353,23 @@ def generate_data(count, output_file):
     ]
 
     for _ in tqdm(range(count), desc="Generating data"):
-        template, pii_types = random.choice(templates)
-        
-        # Generate PII values
-        pii_values = {}
-        entities = []
-        
-        text = template
-        
-        # We need to construct the text and track entity indices
-        # This is a simplified approach. For robust NER, we need exact character offsets.
-        # Let's build the string and track offsets.
-        
-        current_text = ""
-        last_idx = 0
-        
-        # Split template by placeholders to reconstruct and find offsets
-        # This is tricky with multiple placeholders.
-        # Alternative: Use format and then search? Searching might be ambiguous if value appears twice.
-        # Better: Construct piece by piece.
-        
-        # Simple approach for this proof of concept:
-        # 1. Generate values
-        # 2. Format string
-        # 3. Find offsets (assuming uniqueness for simplicity in this POC, or careful construction)
-        
-        # Let's try a safer construction method
-        # We will iterate through the template string and replace placeholders one by one
-        
-        formatted_text = text
-        temp_entities = []
-        
-        for pii_type in pii_types:
-            if pii_type == "name":
-                val = fake.name()
-            elif pii_type == "email":
-                val = fake.email()
-            elif pii_type == "email_obfuscated":
-                val = fake.email().replace("@", " at ").replace(".", " dot ")
-            elif pii_type == "address":
-                val = fake.address().replace("\n", ", ")
-            elif pii_type == "phone_number":
-                val = fake.phone_number()
-            elif pii_type == "phone_number_text":
-                # Simple simulation of text phone number
-                val = "five five five, one two three four" 
-            elif pii_type == "phone_number_obfuscated":
-                val = "555 dot 1234"
-            elif pii_type == "credit_card_number":
-                val = fake.credit_card_number()
-            elif pii_type == "ssn":
-                val = fake.ssn()
-            elif pii_type == "company":
-                val = fake.company()
-            else:
-                val = "UNKNOWN"
-            
-            # Placeholder format
-            placeholder = "{" + pii_type + "}"
-            
-            # Find position of placeholder
-            start_index = formatted_text.find(placeholder)
-            if start_index != -1:
-                # Replace placeholder with value
-                formatted_text = formatted_text.replace(placeholder, val, 1)
-                end_index = start_index + len(val)
-                
-                # Map PII type to NER label (simplified)
-                # Map PII type to NER label (simplified)
-                label = "PER" if pii_type == "name" else \
-                        "LOC" if pii_type == "address" else \
-                        "ORG" if pii_type == "company" else \
-                        "PII" # Default for others (email, phone, ssn, cc)
-                
-                temp_entities.append({
-                    "start": start_index,
-                    "end": end_index,
-                    "label": label,
-                    "text": val
-                })
-                
-                # Adjust positions of subsequent entities if we had them (but we are replacing one by one)
-                # Wait, if we replace {name} with "John Doe", the string length changes.
-                # If we have multiple placeholders, subsequent ones shift.
-                # But we are finding the placeholder in the *current* formatted_text.
-                # The issue is if we have already recorded entities, their offsets might shift?
-                # No, because we haven't recorded them yet.
-                # BUT, if we have multiple placeholders, we need to process them left-to-right to keep indices valid?
-                # Or we can just rebuild the string.
-                pass
-        
-        # Re-doing the construction to be robust against multiple entities
-        # We can't easily track offsets if we just use .replace() repeatedly without care.
-        # Let's use a different strategy: Tokenize the template?
-        
-        # Strategy 2: Build from parts
-        # "The invoice was sent to {name} at {email}."
-        # Parts: ["The invoice was sent to ", "{name}", " at ", "{email}", "."]
-        
-        # Let's stick to the template list but make it a list of parts
-        # For simplicity in this script, let's just handle single PII or simple cases.
-        # Or better, use a library or just careful string manipulation.
-        
-        # Let's use the .format() approach but with unique markers, then replace markers?
-        # Actually, for a training script, we need BIO tags on tokens.
-        # So maybe we should generate word-by-word?
-        
-        # Let's go with a simpler approach:
-        # Generate the text and the entities.
-        # For the purpose of this task, let's keep it simple.
-        
-        # Let's just use one PII per sentence for now to avoid overlap/shift issues in this basic script,
-        # or handle the multi-PII templates carefully.
-        
-        # Actually, let's just use the simple replace and find. 
-        # It might fail if the generated value is the same as some other word, but unlikely for PII.
-        
-        # Re-implementing the loop for correctness:
-        
-        # 1. Identify all placeholders in order
-        import re
-        placeholders = [m.group(0) for m in re.finditer(r'\{(\w+)\}', template)]
-        
-        current_text = template
-        current_offset_shift = 0
-        valid_sample = True
-        
-        sample_entities = []
-        
-        # We need to replace them in order of appearance to track offsets correctly?
-        # Actually, if we use re.sub with a callback, we can track it.
-        
-        def replace_callback(match):
-            key = match.group(1)
-            if key == "name": val = fake.name()
-            elif key == "email": val = fake.email()
-            elif key == "email_obfuscated": val = fake.email().replace("@", " at ").replace(".", " dot ")
-            elif key == "address": val = fake.address().replace("\n", ", ")
-            elif key == "phone_number": val = fake.phone_number()
-            elif key == "phone_number_text": val = "five five five, one two three four"
-            elif key == "phone_number_obfuscated": val = "555 dot 1234"
-            elif key == "credit_card_number": val = fake.credit_card_number()
-            elif key == "ssn": val = fake.ssn()
-            elif key == "company": val = fake.company()
-            else: val = "UNKNOWN"
-            
-            # Determine label
-            label = "PER" if key == "name" else \
-                    "LOC" if key == "address" else \
-                    "ORG" if key == "company" else \
-                    "PII"
-            
-            # We need the start index in the *final* string.
-            # This is hard with re.sub.
-            
-            # Let's just store the value and label, and we'll reconstruct the string manually.
-            return f"___{key}___{val}___{label}___"
-
-        # Intermediate step: replace with markers
-        # "The invoice was sent to ___name___John Doe___PER___ at ..."
-        # This is getting complicated.
-        
-        # Let's try the simplest robust way:
-        # Split by {key}
+        template, _ = random.choice(templates)
         parts = re.split(r'(\{\w+\})', template)
         final_text = ""
         entities = []
-        
+
         for part in parts:
             if part.startswith("{") and part.endswith("}"):
                 key = part[1:-1]
-                if key == "name": val = fake.name()
-                elif key == "email": val = fake.email()
-                elif key == "address": val = fake.address().replace("\n", ", ")
-                elif key == "phone_number": val = fake.phone_number()
-                elif key == "credit_card_number": val = fake.credit_card_number()
-                elif key == "ssn": val = fake.ssn()
-                elif key == "company": val = fake.company()
-                elif key == "dob": val = fake.date_of_birth().strftime("%m/%d/%Y")
-                elif key == "license": 
-                    # Driver license format: State code + random numbers
-                    val = f"{fake.random_uppercase_letter()}{fake.random_int(min=1000000, max=9999999)}"
-                elif key == "passport": 
-                    # US Passport: 9 digits
-                    val = str(fake.random_int(min=100000000, max=999999999))
-                elif key == "ip_address": val = fake.ipv4()
-                elif key == "mrn": 
-                    # Medical record number
-                    val = f"MRN-{fake.random_int(min=100000, max=999999)}"
-                elif key == "bank_account": 
-                    val = str(fake.random_int(min=10000000000, max=99999999999))
-                elif key == "username": 
-                    val = fake.user_name()
-                else: val = part  # Should not happen based on templates
-                
-                # Use specific labels instead of generic "PII"
-                label = "PER" if key == "name" else \
-                        "LOC" if key == "address" else \
-                        "ORG" if key == "company" else \
-                        "EMAIL" if key == "email" else \
-                        "PHONE" if key == "phone_number" else \
-                        "SSN" if key == "ssn" else \
-                        "CREDIT_CARD" if key == "credit_card_number" else \
-                        "DOB" if key == "dob" else \
-                        "LICENSE" if key == "license" else \
-                        "PASSPORT" if key == "passport" else \
-                        "IP_ADDRESS" if key == "ip_address" else \
-                        "MRN" if key == "mrn" else \
-                        "BANK_ACCOUNT" if key == "bank_account" else \
-                        "USERNAME" if key == "username" else \
-                        "PII"  # Fallback for other types
-                
+                val = make_value(key)
+                label = KEY_TO_LABEL.get(key, "PII")
                 start = len(final_text)
                 final_text += val
-                end = len(final_text)
-                
-                entities.append((start, end, label))
+                entities.append((start, start + len(val), label))
             else:
                 final_text += part
-        
-        data.append({
-            "text": final_text,
-            "entities": entities
-        })
+
+        data.append({"text": final_text, "entities": entities})
 
     # Save to JSON
     with open(output_file, 'w') as f:

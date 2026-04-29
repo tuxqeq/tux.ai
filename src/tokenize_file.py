@@ -137,24 +137,25 @@ def process_json(
 def process_file(
     input_path: str,
     output_path: str,
-    token_map_path: str,
     aes_key: bytes = DEFAULT_AES_KEY.encode("utf-8"),
     model_path: str = DEFAULT_MODEL_PATH,
     use_ai: bool = True,
     ai_threshold: float = 0.95,
     redis_url: str | None = None,
     redis_ttl: int = rc.DEFAULT_TTL,
+    session_id: str | None = None,
 ) -> dict:
     """
     Tokenize PII in any supported file type and write:
       - <output_path>  : file with PII replaced by tokens
       - Redis          : tokenmap:{session_id}, filemap:{filename}, keyref:{session_id}
-      - <token_map_path> : JSON fallback (only when redis_url is None)
 
+    Pass an existing session_id to merge tokens into that session.
     Returns a dict with session_id, key_id, and map_location for the caller.
     Rolls back the output file if the Redis write fails.
     """
-    redis_url = redis_url or rc.DEFAULT_REDIS_URL
+    redis_url  = redis_url  or rc.DEFAULT_REDIS_URL
+    session_id = session_id or str(uuid.uuid4())
 
     print("Loading dependencies...")
     from hybrid_detect import HybridDetector
@@ -174,7 +175,6 @@ def process_file(
         chars = process_txt(input_path, output_path, pseudonymizer, detector)
 
     token_map = pseudonymizer.get_token_map()
-    session_id = str(uuid.uuid4())
     filename   = os.path.basename(input_path)
     key_id     = hashlib.sha256(aes_key).hexdigest()[:12]
 
@@ -187,7 +187,7 @@ def process_file(
             url=redis_url,
             ttl=redis_ttl,
         )
-        map_location = f"redis tokenmap:{session_id} @ {redis_url}"
+        map_location = f"redis tokenmap:{session_id} @ {redis_url}"  # noqa
     except Exception as exc:
         if os.path.exists(output_path):
             os.remove(output_path)
@@ -216,11 +216,6 @@ def _default_output(input_path: str) -> str:
     return f"{stem}_tokenized{ext}"
 
 
-def _default_token_map(input_path: str) -> str:
-    stem = os.path.splitext(input_path)[0]
-    return f"{stem}_token_map.json"
-
-
 def main() -> None:
     print("PII Tokenizer — loading arguments...")
 
@@ -229,7 +224,6 @@ def main() -> None:
     )
     parser.add_argument("--input", required=True, help="Path to input file (.txt, .json, ...)")
     parser.add_argument("--output", default=None, help="Output file path (default: <stem>_tokenized.<ext>)")
-    parser.add_argument("--token-map", default=None, dest="token_map", help="Token map output path (default: <stem>_token_map.json)")
     parser.add_argument("--key", default=DEFAULT_AES_KEY, help=f"AES key string — must be 16, 24, or 32 bytes (default: '{DEFAULT_AES_KEY}')")
     parser.add_argument("--model-path", default=DEFAULT_MODEL_PATH, dest="model_path", help=f"Path to AI model directory (default: '{DEFAULT_MODEL_PATH}')")
     parser.add_argument("--no-ai", action="store_true", dest="no_ai", help="Presidio-only mode (faster, no model load)")
@@ -247,13 +241,11 @@ def main() -> None:
         print(f"ERROR: --ai-threshold must be between 0.0 and 1.0; got {args.ai_threshold}")
         sys.exit(1)
 
-    output_path    = args.output    or _default_output(args.input)
-    token_map_path = args.token_map or _default_token_map(args.input)
+    output_path = args.output or _default_output(args.input)
 
     process_file(
         input_path=args.input,
         output_path=output_path,
-        token_map_path=token_map_path,
         aes_key=aes_key,
         model_path=args.model_path,
         use_ai=not args.no_ai,

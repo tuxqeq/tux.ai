@@ -22,6 +22,7 @@ import redis_client as rc
 
 INPUT_DIR  = Path(__file__).parent.parent / "input"
 OUTPUT_DIR = Path(__file__).parent.parent / "output"
+BACK = "← Back"
 DEFAULT_MODEL_PATH = "models/pii_model_advanced"
 DEFAULT_AES_KEY    = "16ByteSecureKey!"
 
@@ -82,14 +83,14 @@ def pick_input_file() -> Path | None:
         print_error("No files found in input/")
         return None
 
-    choices = [f.name for f in files] + ["← Back"]
+    choices = [f.name for f in files] + [BACK]
     choice = questionary.select(
         "Select a file from input/:",
         choices=choices,
         style=STYLE,
     ).ask()
 
-    if choice is None or choice == "← Back":
+    if choice is None or choice == BACK:
         return None
 
     return INPUT_DIR / choice
@@ -115,11 +116,11 @@ def pick_model() -> str | None:
 
     choice = questionary.select(
         "Select AI model:",
-        choices=models + ["← Back"],
+        choices=models + [BACK],
         style=STYLE,
     ).ask()
 
-    if choice is None or choice == "← Back":
+    if choice is None or choice == BACK:
         return None
 
     return str(MODELS_DIR / choice)
@@ -194,11 +195,11 @@ def run_detect() -> None:
 
     source = questionary.select(
         "Choose input source:",
-        choices=["Enter text manually", "Choose file from input/", "← Back"],
+        choices=["Enter text manually", "Choose file from input/", BACK],
         style=STYLE,
     ).ask()
 
-    if source is None or source == "← Back":
+    if source is None or source == BACK:
         return
 
     if source == "Enter text manually":
@@ -295,13 +296,36 @@ def run_tokenize() -> None:
     if not ensure_redis(redis_url):
         return
 
+    # Offer to merge into an existing session
+    existing_session_id = None
+    sessions = rc.list_sessions(url=redis_url)
+    if sessions:
+        session_choices = [
+            f"{s['filename']}  [{s['session_id'][:8]}...]  {s.get('token_count','?')} tokens"
+            for s in sessions
+        ]
+        use_existing = questionary.confirm(
+            "Add to an existing session?",
+            default=False,
+            style=STYLE,
+        ).ask()
+        if use_existing:
+            chosen = questionary.select(
+                "Select session:",
+                choices=session_choices + [BACK],
+                style=STYLE,
+            ).ask()
+            if chosen and chosen != BACK:
+                idx = session_choices.index(chosen)
+                existing_session_id = sessions[idx]["session_id"]
+                print_success(f"Will merge into session {existing_session_id[:8]}...")
+
     use_ai, model_path = ask_ai_mode()
 
     OUTPUT_DIR.mkdir(exist_ok=True)
     stem = path.stem
     ext  = path.suffix
-    output_path    = OUTPUT_DIR / f"{stem}_tokenized{ext}"
-    token_map_path = OUTPUT_DIR / f"{stem}_token_map.json"
+    output_path = OUTPUT_DIR / f"{stem}_tokenized{ext}"
 
     console.print()
     with console.status("[cyan]Tokenizing...[/cyan]", spinner="dots"):
@@ -310,11 +334,11 @@ def run_tokenize() -> None:
             result = process_file(
                 input_path=str(path),
                 output_path=str(output_path),
-                token_map_path=str(token_map_path),
                 aes_key=aes_key,
                 model_path=model_path,
                 use_ai=use_ai,
                 redis_url=redis_url,
+                session_id=existing_session_id,
             )
         except FileNotFoundError as e:
             print_error(str(e))
@@ -354,14 +378,14 @@ def pick_output_file() -> Path | None:
         print_error("No tokenized files found in output/")
         return None
 
-    choices = [f.name for f in files] + ["← Back"]
+    choices = [f.name for f in files] + [BACK]
     choice = questionary.select(
         "Select a tokenized file from output/:",
         choices=choices,
         style=STYLE,
     ).ask()
 
-    if choice is None or choice == "← Back":
+    if choice is None or choice == BACK:
         return None
 
     return OUTPUT_DIR / choice

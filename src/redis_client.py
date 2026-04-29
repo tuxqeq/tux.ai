@@ -49,33 +49,39 @@ def store_token_map(
     ttl: int = DEFAULT_TTL,
 ) -> None:
     """
-    Atomically store a token map in Redis with full metadata.
+    Atomically store (or merge into) a token map in Redis with full metadata.
 
     Keys written:
       tokenmap:{session_id}  — hash of { token -> AES-encrypted value }
       filemap:{filename}     — session_id (lookup by filename)
       keyref:{session_id}    — metadata hash (filename, key_id, timestamp, token_count)
 
+    When merging into an existing session, token_count reflects the new total.
     Raises redis.RedisError on failure — caller is responsible for rollback.
     """
     if not token_map:
         return
 
     r = get_client(url)
+
     pipe = r.pipeline(transaction=True)
-
     pipe.hset(f"tokenmap:{session_id}", mapping=token_map)
+    pipe.hlen(f"tokenmap:{session_id}")
     pipe.expire(f"tokenmap:{session_id}", ttl)
-
     pipe.set(f"filemap:{filename}", session_id, ex=ttl)
+    results = pipe.execute()
 
-    pipe.hset(f"keyref:{session_id}", mapping={
+    total_tokens = results[1]
+
+    pipe2 = r.pipeline(transaction=True)
+    pipe2.hset(f"keyref:{session_id}", mapping={
         "filename":    filename,
         "key_id":      key_id,
         "timestamp":   str(int(time.time())),
-        "token_count": str(len(token_map)),
+        "token_count": str(total_tokens),
     })
-    pipe.expire(f"keyref:{session_id}", ttl)
+    pipe2.expire(f"keyref:{session_id}", ttl)
+    pipe2.execute()
 
     pipe.execute()
 
@@ -98,6 +104,20 @@ def get_token(session_id: str, token: str, url: str = DEFAULT_REDIS_URL) -> str 
 def get_session_meta(session_id: str, url: str = DEFAULT_REDIS_URL) -> Dict[str, str]:
     """Retrieve metadata for a session (filename, key_id, timestamp, token_count)."""
     return get_client(url).hgetall(f"keyref:{session_id}")
+
+
+def list_sessions(url: str = DEFAULT_REDIS_URL) -> list[Dict]:
+    """Return all active sessions as a list of metadata dicts, newest first."""
+    r = get_client(url)
+    keys = r.keys("keyref:*")
+    sessions = []
+    for key in keys:
+        meta = r.hgetall(key)
+        if meta:
+            session_id = key.replace("keyref:", "")
+            sessions.append({"session_id": session_id, **meta})
+    sessions.sort(key=lambda s: int(s.get("timestamp", 0)), reverse=True)
+    return sessions
 
 
 def ping(url: str = DEFAULT_REDIS_URL) -> bool:

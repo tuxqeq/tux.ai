@@ -54,7 +54,7 @@ def _trim_keyword_prefix(text: str, start: int, end: int, label: str):
 
 
 class HybridDetector:
-    def __init__(self, ai_model_path: str = "models/pii_model_advanced",
+    def __init__(self, ai_model_path: str = "models/pii_model_v2",
                  use_ai: bool = True, ai_threshold: float = 0.95):
         if not (0.0 <= ai_threshold <= 1.0):
             raise ValueError(f"ai_threshold must be between 0 and 1, got {ai_threshold}")
@@ -196,7 +196,7 @@ def main() -> None:
     group.add_argument("--text", type=str, help="Text to analyze")
     group.add_argument("--file", type=str, help="File to analyze")
     parser.add_argument("--output", type=str, help="Output file for encrypted text")
-    parser.add_argument("--model-path", type=str, default="models/pii_model_advanced",
+    parser.add_argument("--model-path", type=str, default="models/pii_model_v2",
                         help="Path to AI model")
     parser.add_argument("--encrypt", action="store_true", help="Encrypt detected PII")
     parser.add_argument("--key", type=str, default="16ByteSecureKey!",

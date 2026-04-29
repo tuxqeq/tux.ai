@@ -19,16 +19,20 @@ DEFAULT_MODEL_PATH = "models/pii_model_advanced" # pre-trained PII model
 # ──────────────────────────────────────────────────────────────────────────────
 
 import argparse
+import hashlib
 import json
 import os
 import re
 import sys
+import uuid
 from typing import Any, Dict, List
 
 from tqdm import tqdm
 
 # Allow running from repo root or from src/
 sys.path.insert(0, os.path.dirname(__file__))
+
+import redis_client as rc
 
 # HybridDetector and PIIPseudonymizer are imported lazily inside process_file()
 # so the script can print status messages before the slow transformers import.
@@ -138,12 +142,20 @@ def process_file(
     model_path: str = DEFAULT_MODEL_PATH,
     use_ai: bool = True,
     ai_threshold: float = 0.95,
-) -> None:
+    redis_url: str | None = None,
+    redis_ttl: int = rc.DEFAULT_TTL,
+) -> dict:
     """
     Tokenize PII in any supported file type and write:
-      - <output_path>    : file with PII replaced by tokens
-      - <token_map_path> : JSON map { token -> AES-encrypted original }
+      - <output_path>  : file with PII replaced by tokens
+      - Redis          : tokenmap:{session_id}, filemap:{filename}, keyref:{session_id}
+      - <token_map_path> : JSON fallback (only when redis_url is None)
+
+    Returns a dict with session_id, key_id, and map_location for the caller.
+    Rolls back the output file if the Redis write fails.
     """
+    redis_url = redis_url or rc.DEFAULT_REDIS_URL
+
     print("Loading dependencies...")
     from hybrid_detect import HybridDetector
     from pseudonymize import PIIPseudonymizer
@@ -159,20 +171,40 @@ def process_file(
     if ext == ".json":
         chars = process_json(input_path, output_path, pseudonymizer, detector)
     else:
-        # .txt and any other extension treated as plain text
         chars = process_txt(input_path, output_path, pseudonymizer, detector)
 
     token_map = pseudonymizer.get_token_map()
+    session_id = str(uuid.uuid4())
+    filename   = os.path.basename(input_path)
+    key_id     = hashlib.sha256(aes_key).hexdigest()[:12]
 
-    with open(token_map_path, "w", encoding="utf-8") as f:
-        json.dump(token_map, f, indent=2, ensure_ascii=False)
+    try:
+        rc.store_token_map(
+            token_map=token_map,
+            session_id=session_id,
+            filename=filename,
+            key_id=key_id,
+            url=redis_url,
+            ttl=redis_ttl,
+        )
+        map_location = f"redis tokenmap:{session_id} @ {redis_url}"
+    except Exception as exc:
+        if os.path.exists(output_path):
+            os.remove(output_path)
+        raise RuntimeError(
+            f"Redis write failed — output file removed to prevent data loss: {exc}"
+        ) from exc
 
     print(f"\n{'='*60}")
     print(f"  Characters processed : {chars:,}")
     print(f"  Unique PII values    : {len(token_map)}")
     print(f"  Tokenized output     : {output_path}")
-    print(f"  Token map            : {token_map_path}")
+    print(f"  Token map            : {map_location}")
+    print(f"  Session ID           : {session_id}")
+    print(f"  Key ID               : {key_id}")
     print(f"{'='*60}\n")
+
+    return {"session_id": session_id, "key_id": key_id, "map_location": map_location}
 
 
 # ---------------------------------------------------------------------------
@@ -202,6 +234,8 @@ def main() -> None:
     parser.add_argument("--model-path", default=DEFAULT_MODEL_PATH, dest="model_path", help=f"Path to AI model directory (default: '{DEFAULT_MODEL_PATH}')")
     parser.add_argument("--no-ai", action="store_true", dest="no_ai", help="Presidio-only mode (faster, no model load)")
     parser.add_argument("--ai-threshold", type=float, default=0.95, dest="ai_threshold", help="Min confidence for AI detections (default: 0.95)")
+    parser.add_argument("--redis", default=rc.DEFAULT_REDIS_URL, dest="redis_url", metavar="REDIS_URL", help=f"Redis URL (default: $REDIS_URL or redis://localhost:6379)")
+    parser.add_argument("--redis-ttl", type=int, default=rc.DEFAULT_TTL, dest="redis_ttl", metavar="SECONDS", help=f"TTL in seconds for Redis keys (default: {rc.DEFAULT_TTL} = 30 days)")
     args = parser.parse_args()
 
     aes_key = args.key.encode("utf-8")
@@ -224,6 +258,8 @@ def main() -> None:
         model_path=args.model_path,
         use_ai=not args.no_ai,
         ai_threshold=args.ai_threshold,
+        redis_url=args.redis_url,
+        redis_ttl=args.redis_ttl,
     )
 
 

@@ -179,47 +179,7 @@ def main() -> None:
     if val_ds:
         logger.info(f"Val examples  : {len(val_ds)}")
 
-    # ── 5. Verify completion-only loss setup ────────────────────────────────────
-    logger.info("\nSetting up completion-only loss (assistant tokens only)...")
-    from trl import DataCollatorForCompletionOnlyLM
-
-    response_template_ids = tokenizer.encode(
-        RESPONSE_TEMPLATE, add_special_tokens=False
-    )
-    logger.info(
-        f"Response template token IDs: {response_template_ids} "
-        f"(decoded: {tokenizer.decode(response_template_ids)!r})"
-    )
-
-    data_collator = DataCollatorForCompletionOnlyLM(
-        response_template=response_template_ids,
-        tokenizer=tokenizer,
-    )
-
-    # Quick sanity check: verify labels mask on first example
-    sample_enc = tokenizer(
-        train_ds[0]["text"],
-        return_tensors="pt",
-        max_length=args.max_seq_length,
-        truncation=True,
-    )
-    sample_batch = data_collator([{"input_ids": sample_enc["input_ids"][0].tolist()}])
-    labels = sample_batch["labels"][0].tolist()
-    non_masked = sum(1 for l in labels if l != -100)
-    total_tokens = len(labels)
-    logger.info(
-        f"Label check on first example: {non_masked}/{total_tokens} tokens have loss computed "
-        f"({'OK' if non_masked > 0 else 'WARNING: all masked — check response template'})"
-    )
-    if non_masked == 0:
-        logger.error(
-            "All tokens are masked (label=-100). The response template may not match "
-            f"the tokenizer output. RESPONSE_TEMPLATE={RESPONSE_TEMPLATE!r}\n"
-            f"First 200 chars of rendered example: {train_ds[0]['text'][:200]}"
-        )
-        sys.exit(1)
-
-    # ── 6. Configure trainer ───────────────────────────────────────────────────
+    # ── 5. Configure trainer ───────────────────────────────────────────────────
     import torch
     from trl import SFTConfig, SFTTrainer
 
@@ -256,8 +216,40 @@ def main() -> None:
         train_dataset=train_ds,
         eval_dataset=val_ds,
         args=sft_config,
-        data_collator=data_collator,
     )
+
+    # ── 6. Apply completion-only loss (assistant tokens only) ──────────────────
+    # DataCollatorForCompletionOnlyLM was removed from TRL's public API in
+    # newer releases. Unsloth's train_on_responses_only patches the trainer
+    # in-place and is the recommended replacement.
+    logger.info("\nSetting up completion-only loss (assistant tokens only)...")
+    logger.info(f"  Instruction part : '<|im_start|>user\\n'")
+    logger.info(f"  Response part    : '{RESPONSE_TEMPLATE}'")
+
+    from unsloth.chat_templates import train_on_responses_only
+    trainer = train_on_responses_only(
+        trainer,
+        instruction_part="<|im_start|>user\n",
+        response_part=RESPONSE_TEMPLATE,
+    )
+
+    # Sanity check: verify labels are not all -100 on the first batch
+    logger.info("\nVerifying label mask on first training batch...")
+    sample_batch = next(iter(trainer.get_train_dataloader()))
+    labels = sample_batch["labels"][0].tolist()
+    non_masked = sum(1 for l in labels if l != -100)
+    total_tokens = len(labels)
+    logger.info(
+        f"Label check: {non_masked}/{total_tokens} tokens have loss computed "
+        f"({'OK' if non_masked > 0 else 'FAIL — all tokens masked'})"
+    )
+    if non_masked == 0:
+        logger.error(
+            "All tokens are masked (label=-100). The response template may not match "
+            f"the tokenizer output. RESPONSE_TEMPLATE={RESPONSE_TEMPLATE!r}\n"
+            f"First 200 chars of rendered example: {train_ds[0]['text'][:200]}"
+        )
+        sys.exit(1)
 
     # ── 7. Train ───────────────────────────────────────────────────────────────
     logger.info("\nStarting training...")

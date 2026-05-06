@@ -17,7 +17,7 @@ def predict(text: str, detector) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model-path", type=str, default="models/pii_model_advanced", dest="model_path")
+    parser.add_argument("--model-path", type=str, default="models/pii_model_v2", dest="model_path")
     parser.add_argument("--text", type=str, help="Text to analyze; omit for interactive mode")
     parser.add_argument("--no-ai", action="store_true", dest="no_ai")
     args = parser.parse_args()

@@ -23,7 +23,7 @@ import redis_client as rc
 INPUT_DIR  = Path(__file__).parent.parent / "input"
 OUTPUT_DIR = Path(__file__).parent.parent / "output"
 BACK = "← Back"
-DEFAULT_MODEL_PATH = "models/pii_model_advanced"
+DEFAULT_MODEL_PATH = "models/pii_model_v2"
 DEFAULT_AES_KEY    = "16ByteSecureKey!"
 
 console = Console()

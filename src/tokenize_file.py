@@ -15,7 +15,7 @@ Usage:
 
 # ── Defaults ──────────────────────────────────────────────────────────────────
 DEFAULT_AES_KEY    = "16ByteSecureKey!"          # 16-byte AES-128 key
-DEFAULT_MODEL_PATH = "models/pii_model_advanced" # pre-trained PII model
+DEFAULT_MODEL_PATH = "models/pii_model_v2" # pre-trained PII model
 # ──────────────────────────────────────────────────────────────────────────────
 
 import argparse

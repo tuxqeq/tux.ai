@@ -96,3 +96,12 @@ htmlcov/
 *.temp
 tmp/
 temp/
+
+# LLM training artifacts
+llm/data/
+llm/checkpoints/
+llm/exports/
+*.gguf
+
+# Redis dump
+dump.rdb

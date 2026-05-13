@@ -38,17 +38,34 @@ def _render_modelfile(template_path: str, gguf_path: str, output_path: str) -> N
         f.write(content)
 
 
+def _find_fast_language_model():
+    """Locate FastLanguageModel across unsloth package layouts (2024 vs 2025+)."""
+    import importlib
+    for mod_name, attr in [
+        ("unsloth", "FastLanguageModel"),
+        ("unsloth_zoo", "FastLanguageModel"),
+        ("unsloth_zoo.training_utils", "FastLanguageModel"),
+    ]:
+        try:
+            mod = importlib.import_module(mod_name)
+            cls = getattr(mod, attr, None)
+            if cls is not None and hasattr(cls, "from_pretrained"):
+                return cls
+        except Exception:
+            pass
+    return None
+
+
 def export_via_unsloth(merged_dir: str, output_dir: str, quantization: str) -> str | None:
     """Try Unsloth's built-in GGUF export. Returns GGUF path on success, None on failure."""
-    try:
-        from unsloth import FastLanguageModel
-    except ImportError:
-        print("Unsloth not installed; skipping Unsloth export path.")
+    fast_lm_cls = _find_fast_language_model()
+    if fast_lm_cls is None:
+        print("Unsloth FastLanguageModel not available; skipping Unsloth export path.")
         return None
 
     print("Loading merged model via Unsloth for GGUF export...")
     try:
-        model, tokenizer = FastLanguageModel.from_pretrained(
+        model, tokenizer = fast_lm_cls.from_pretrained(
             model_name=merged_dir,
             max_seq_length=4096,
             dtype=None,
@@ -76,21 +93,29 @@ def export_via_unsloth(merged_dir: str, output_dir: str, quantization: str) -> s
     return gguf_path
 
 
-def export_via_llamacpp(merged_dir: str, output_dir: str, quantization: str) -> str | None:
-    """Fallback: use llama.cpp's convert_hf_to_gguf.py."""
-    llamacpp_convert = shutil.which("convert_hf_to_gguf.py")
-
-    # Common install locations
+def _find_llamacpp_convert() -> str | None:
+    """Find convert_hf_to_gguf.py, including Unsloth's bundled llama.cpp."""
+    candidate = shutil.which("convert_hf_to_gguf.py")
+    if candidate:
+        return candidate
     search_paths = [
-        "convert_hf_to_gguf.py",
+        # Unsloth builds llama.cpp here
+        "/root/.unsloth/llama.cpp/convert_hf_to_gguf.py",
+        os.path.expanduser("~/.unsloth/llama.cpp/convert_hf_to_gguf.py"),
+        # Manual clones
         os.path.expanduser("~/llama.cpp/convert_hf_to_gguf.py"),
         os.path.expanduser("~/llama.cpp/convert-hf-to-gguf.py"),
         "/usr/local/lib/llama.cpp/convert_hf_to_gguf.py",
     ]
     for p in search_paths:
         if os.path.exists(p):
-            llamacpp_convert = p
-            break
+            return p
+    return None
+
+
+def export_via_llamacpp(merged_dir: str, output_dir: str, quantization: str) -> str | None:
+    """Fallback: use llama.cpp's convert_hf_to_gguf.py."""
+    llamacpp_convert = _find_llamacpp_convert()
 
     if not llamacpp_convert:
         print(

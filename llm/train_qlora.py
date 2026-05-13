@@ -84,10 +84,37 @@ def main() -> None:
 
     # ── 1. Load base model ─────────────────────────────────────────────────────
     logger.info("\nLoading base model via Unsloth...")
-    try:
-        from unsloth import FastLanguageModel
-    except ImportError:
-        logger.error("Unsloth not installed. Run: pip install unsloth")
+    FastLanguageModel = None
+    _unsloth_import_errors = []
+
+    # unsloth 2025+ restructured: FastLanguageModel moved to unsloth_zoo
+    for _mod, _attr in [
+        ("unsloth", "FastLanguageModel"),
+        ("unsloth_zoo", "FastLanguageModel"),
+        ("unsloth_zoo.models.loader", "FastLanguageModel"),
+        ("unsloth_zoo.training_utils", "FastLanguageModel"),
+    ]:
+        try:
+            import importlib
+            _m = importlib.import_module(_mod)
+            FastLanguageModel = getattr(_m, _attr, None)
+            if FastLanguageModel is not None and hasattr(FastLanguageModel, "from_pretrained"):
+                logger.info(f"FastLanguageModel loaded from: {_mod}.{_attr}")
+                break
+            FastLanguageModel = None
+        except Exception as exc:
+            _unsloth_import_errors.append(f"{_mod}: {exc}")
+
+    if FastLanguageModel is None:
+        logger.error(
+            "FastLanguageModel not found in unsloth or unsloth_zoo.\n"
+            "The PyPI 'unsloth' package is a meta-package; install the full GPU build:\n\n"
+            "  pip install 'unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git'\n\n"
+            "Or for RunPod / CUDA 12.4:\n"
+            "  pip install unsloth_zoo\n"
+            "  pip install 'unsloth @ git+https://github.com/unslothai/unsloth.git'\n\n"
+            f"Attempted imports:\n" + "\n".join(f"  {e}" for e in _unsloth_import_errors)
+        )
         sys.exit(1)
 
     model, tokenizer = FastLanguageModel.from_pretrained(

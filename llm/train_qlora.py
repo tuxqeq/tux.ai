@@ -11,6 +11,7 @@ Usage:
 """
 
 import argparse
+import importlib
 import json
 import logging
 import os
@@ -20,7 +21,11 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 DEFAULT_OUTPUT_DIR = os.path.join(_REPO_ROOT, "llm", "checkpoints", "run_001")
 DEFAULT_BASE_MODEL = "unsloth/Qwen3-8B"
+RESPONSE_TEMPLATE  = "<|im_start|>assistant\n"
+INSTRUCTION_PART   = "<|im_start|>user\n"
 
+
+# ── Helpers ────────────────────────────────────────────────────────────────────
 
 def _setup_logging(output_dir: str) -> logging.Logger:
     os.makedirs(output_dir, exist_ok=True)
@@ -46,6 +51,111 @@ def _load_jsonl(path: str) -> list[dict]:
     return examples
 
 
+def _load_fast_language_model(logger: logging.Logger):
+    """Locate FastLanguageModel across unsloth package layouts (2024 vs 2025+)."""
+    candidates = [
+        ("unsloth", "FastLanguageModel"),
+        ("unsloth_zoo", "FastLanguageModel"),
+        ("unsloth_zoo.models.loader", "FastLanguageModel"),
+        ("unsloth_zoo.training_utils", "FastLanguageModel"),
+    ]
+    errors = []
+    for mod_name, attr in candidates:
+        try:
+            mod = importlib.import_module(mod_name)
+            cls = getattr(mod, attr, None)
+            if cls is not None and hasattr(cls, "from_pretrained"):
+                logger.info(f"FastLanguageModel loaded from: {mod_name}.{attr}")
+                return cls
+        except Exception as exc:
+            errors.append(f"{mod_name}: {exc}")
+
+    torchvision_missing = any("torchvision" in e for e in errors)
+    if torchvision_missing:
+        hint = "torchvision is missing:\n  pip install torchvision"
+    else:
+        hint = (
+            "Install the full GPU build:\n"
+            "  pip install torchvision\n"
+            "  pip install 'unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git'"
+        )
+    logger.error(
+        "FastLanguageModel not found.\n" + hint + "\n\nAttempted:\n"
+        + "\n".join(f"  {e}" for e in errors)
+    )
+    sys.exit(1)
+
+
+def _render_chat_template(tokenizer, messages: list[dict]) -> str:
+    """Apply Qwen3 chat template with thinking disabled; falls back gracefully."""
+    try:
+        return tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=False,
+            enable_thinking=False,
+        )
+    except TypeError:
+        return tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=False
+        )
+
+
+def _build_datasets(args, tokenizer, logger: logging.Logger):
+    """Load JSONL files and apply the chat template to every example."""
+    from datasets import Dataset
+
+    def apply_template(example: dict) -> dict:
+        return {"text": _render_chat_template(tokenizer, example["messages"])}
+
+    train_ds = Dataset.from_list(_load_jsonl(args.train_file)).map(
+        apply_template, remove_columns=["messages"]
+    )
+    logger.info(f"Train examples: {len(train_ds)}")
+
+    val_ds = None
+    if args.val_file and os.path.exists(args.val_file):
+        val_ds = Dataset.from_list(_load_jsonl(args.val_file)).map(
+            apply_template, remove_columns=["messages"]
+        )
+        logger.info(f"Val examples  : {len(val_ds)}")
+
+    return train_ds, val_ds
+
+
+def _verify_label_mask(trainer, train_ds, logger: logging.Logger) -> None:
+    """Abort if completion-only masking leaves no loss tokens on the first batch."""
+    logger.info("\nVerifying label mask on first training batch...")
+    sample_batch = next(iter(trainer.get_train_dataloader()))
+    labels = sample_batch["labels"][0].tolist()
+    non_masked   = sum(1 for lb in labels if lb != -100)
+    total_tokens = len(labels)
+    logger.info(
+        f"Label check: {non_masked}/{total_tokens} tokens have loss computed "
+        f"({'OK' if non_masked > 0 else 'FAIL — all tokens masked'})"
+    )
+    if non_masked == 0:
+        logger.error(
+            "All tokens are masked (label=-100). The response template may not match "
+            f"the tokenizer output. RESPONSE_TEMPLATE={RESPONSE_TEMPLATE!r}\n"
+            f"First 200 chars of rendered example: {train_ds[0]['text'][:200]}"
+        )
+        sys.exit(1)
+
+
+def _save_model(model, tokenizer, output_dir: str, logger: logging.Logger) -> tuple[str, str]:
+    adapter_dir = os.path.join(output_dir, "adapter")
+    merged_dir  = os.path.join(output_dir, "merged_16bit")
+    logger.info(f"\nSaving LoRA adapter to {adapter_dir}")
+    model.save_pretrained(adapter_dir)
+    tokenizer.save_pretrained(adapter_dir)
+    logger.info(f"Saving merged 16-bit model to {merged_dir}")
+    model.save_pretrained_merged(merged_dir, tokenizer, save_method="merged_16bit")
+    return adapter_dir, merged_dir
+
+
+# ── Main ───────────────────────────────────────────────────────────────────────
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Fine-tune Qwen3 chatbot on tokenized PII corpus via QLoRA."
@@ -60,7 +170,7 @@ def main() -> None:
     parser.add_argument("--batch-size",  type=int,   default=2)
     parser.add_argument("--grad-accum",  type=int,   default=4)
     parser.add_argument("--max-seq-length", type=int, default=4096,
-                        help="Max token length per example. Reduce to 2048 if OOM.")
+                        help="Max token length. Reduce to 2048 if OOM.")
     parser.add_argument("--lora-rank",   type=int,   default=16)
     parser.add_argument("--lora-alpha",  type=int,   default=32)
     parser.add_argument("--seed",        type=int,   default=42)
@@ -84,57 +194,24 @@ def main() -> None:
 
     # ── 1. Load base model ─────────────────────────────────────────────────────
     logger.info("\nLoading base model via Unsloth...")
-    FastLanguageModel = None
-    _unsloth_import_errors = []
+    fast_lm_cls = _load_fast_language_model(logger)
 
-    # unsloth 2025+ restructured: FastLanguageModel moved to unsloth_zoo
-    for _mod, _attr in [
-        ("unsloth", "FastLanguageModel"),
-        ("unsloth_zoo", "FastLanguageModel"),
-        ("unsloth_zoo.models.loader", "FastLanguageModel"),
-        ("unsloth_zoo.training_utils", "FastLanguageModel"),
-    ]:
-        try:
-            import importlib
-            _m = importlib.import_module(_mod)
-            FastLanguageModel = getattr(_m, _attr, None)
-            if FastLanguageModel is not None and hasattr(FastLanguageModel, "from_pretrained"):
-                logger.info(f"FastLanguageModel loaded from: {_mod}.{_attr}")
-                break
-            FastLanguageModel = None
-        except Exception as exc:
-            _unsloth_import_errors.append(f"{_mod}: {exc}")
-
-    if FastLanguageModel is None:
-        logger.error(
-            "FastLanguageModel not found in unsloth or unsloth_zoo.\n"
-            "The PyPI 'unsloth' package is a meta-package; install the full GPU build:\n\n"
-            "  pip install 'unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git'\n\n"
-            "Or for RunPod / CUDA 12.4:\n"
-            "  pip install unsloth_zoo\n"
-            "  pip install 'unsloth @ git+https://github.com/unslothai/unsloth.git'\n\n"
-            f"Attempted imports:\n" + "\n".join(f"  {e}" for e in _unsloth_import_errors)
-        )
-        sys.exit(1)
-
-    model, tokenizer = FastLanguageModel.from_pretrained(
+    model, tokenizer = fast_lm_cls.from_pretrained(
         model_name=args.base_model,
         max_seq_length=args.max_seq_length,
-        dtype=None,          # auto-detect bf16/fp16
+        dtype=None,
         load_in_4bit=True,
         trust_remote_code=True,
     )
 
     # ── 2. Apply LoRA ──────────────────────────────────────────────────────────
     logger.info("Applying LoRA adapters...")
-    model = FastLanguageModel.get_peft_model(
+    model = fast_lm_cls.get_peft_model(
         model,
         r=args.lora_rank,
         lora_alpha=args.lora_alpha,
-        target_modules=[
-            "q_proj", "k_proj", "v_proj", "o_proj",
-            "gate_proj", "up_proj", "down_proj",
-        ],
+        target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
+                        "gate_proj", "up_proj", "down_proj"],
         lora_dropout=0.0,
         bias="none",
         use_gradient_checkpointing="unsloth",
@@ -148,63 +225,19 @@ def main() -> None:
         {"role": "user",      "content": "Hello"},
         {"role": "assistant", "content": "Hi there!"},
     ]
-    try:
-        sample_rendered = tokenizer.apply_chat_template(
-            sample_msgs,
-            tokenize=False,
-            add_generation_prompt=False,
-            enable_thinking=False,
-        )
-        logger.info("Sample chat template output (first 300 chars):")
-        logger.info(sample_rendered[:300])
-    except TypeError:
-        # Older tokenizer without enable_thinking — safe to ignore
-        logger.warning(
-            "tokenizer.apply_chat_template does not support enable_thinking; "
-            "training without explicit flag. Verify no <think> tokens appear in output."
-        )
-        sample_rendered = tokenizer.apply_chat_template(
-            sample_msgs, tokenize=False, add_generation_prompt=False
-        )
+    sample_rendered = _render_chat_template(tokenizer, sample_msgs)
+    logger.info("Sample chat template output (first 300 chars):")
+    logger.info(sample_rendered[:300])
 
-    # Determine response template for completion-only loss
-    RESPONSE_TEMPLATE = "<|im_start|>assistant\n"
     if RESPONSE_TEMPLATE not in sample_rendered:
         logger.warning(
-            f"Response template '{RESPONSE_TEMPLATE}' not found in rendered sample. "
+            f"Response template {RESPONSE_TEMPLATE!r} not found in rendered sample. "
             "Check tokenizer.chat_template and update RESPONSE_TEMPLATE if needed."
         )
 
     # ── 4. Prepare dataset ─────────────────────────────────────────────────────
     logger.info("\nLoading and formatting dataset...")
-    from datasets import Dataset
-
-    def apply_template(example: dict) -> dict:
-        messages = example["messages"]
-        try:
-            text = tokenizer.apply_chat_template(
-                messages,
-                tokenize=False,
-                add_generation_prompt=False,
-                enable_thinking=False,
-            )
-        except TypeError:
-            text = tokenizer.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=False
-            )
-        return {"text": text}
-
-    train_raw = _load_jsonl(args.train_file)
-    train_ds  = Dataset.from_list(train_raw).map(apply_template, remove_columns=["messages"])
-
-    val_ds = None
-    if args.val_file and os.path.exists(args.val_file):
-        val_raw = _load_jsonl(args.val_file)
-        val_ds  = Dataset.from_list(val_raw).map(apply_template, remove_columns=["messages"])
-
-    logger.info(f"Train examples: {len(train_ds)}")
-    if val_ds:
-        logger.info(f"Val examples  : {len(val_ds)}")
+    train_ds, val_ds = _build_datasets(args, tokenizer, logger)
 
     # ── 5. Configure trainer ───────────────────────────────────────────────────
     import torch
@@ -212,8 +245,6 @@ def main() -> None:
 
     bf16_supported = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
     logger.info(f"\nbf16 supported: {bf16_supported}")
-
-    eval_strategy = "steps" if val_ds else "no"
 
     sft_config = SFTConfig(
         output_dir=args.output_dir,
@@ -228,7 +259,7 @@ def main() -> None:
         logging_steps=10,
         save_steps=200,
         eval_steps=200 if val_ds else None,
-        eval_strategy=eval_strategy,
+        eval_strategy="steps" if val_ds else "no",
         seed=args.seed,
         max_seq_length=args.max_seq_length,
         dataset_text_field="text",
@@ -245,67 +276,34 @@ def main() -> None:
         args=sft_config,
     )
 
-    # ── 6. Apply completion-only loss (assistant tokens only) ──────────────────
-    # DataCollatorForCompletionOnlyLM was removed from TRL's public API in
-    # newer releases. Unsloth's train_on_responses_only patches the trainer
-    # in-place and is the recommended replacement.
+    # ── 6. Apply completion-only loss ──────────────────────────────────────────
     logger.info("\nSetting up completion-only loss (assistant tokens only)...")
-    logger.info(f"  Instruction part : '<|im_start|>user\\n'")
-    logger.info(f"  Response part    : '{RESPONSE_TEMPLATE}'")
+    logger.info("  Instruction part : '<|im_start|>user\\n'")
+    logger.info("  Response part    : '<|im_start|>assistant\\n'")
 
     from unsloth.chat_templates import train_on_responses_only
     trainer = train_on_responses_only(
         trainer,
-        instruction_part="<|im_start|>user\n",
+        instruction_part=INSTRUCTION_PART,
         response_part=RESPONSE_TEMPLATE,
     )
 
-    # Sanity check: verify labels are not all -100 on the first batch
-    logger.info("\nVerifying label mask on first training batch...")
-    sample_batch = next(iter(trainer.get_train_dataloader()))
-    labels = sample_batch["labels"][0].tolist()
-    non_masked = sum(1 for l in labels if l != -100)
-    total_tokens = len(labels)
-    logger.info(
-        f"Label check: {non_masked}/{total_tokens} tokens have loss computed "
-        f"({'OK' if non_masked > 0 else 'FAIL — all tokens masked'})"
-    )
-    if non_masked == 0:
-        logger.error(
-            "All tokens are masked (label=-100). The response template may not match "
-            f"the tokenizer output. RESPONSE_TEMPLATE={RESPONSE_TEMPLATE!r}\n"
-            f"First 200 chars of rendered example: {train_ds[0]['text'][:200]}"
-        )
-        sys.exit(1)
+    _verify_label_mask(trainer, train_ds, logger)
 
     # ── 7. Train ───────────────────────────────────────────────────────────────
     logger.info("\nStarting training...")
     train_result = trainer.train()
-
     train_loss = train_result.training_loss
     logger.info(f"\nTraining complete. Final train loss: {train_loss:.4f}")
 
+    val_loss = None
     if val_ds:
         eval_result = trainer.evaluate()
         val_loss = eval_result.get("eval_loss", float("nan"))
         logger.info(f"Final val loss: {val_loss:.4f}")
-    else:
-        val_loss = None
 
-    # ── 8. Save adapter ────────────────────────────────────────────────────────
-    adapter_dir = os.path.join(args.output_dir, "adapter")
-    logger.info(f"\nSaving LoRA adapter to {adapter_dir}")
-    model.save_pretrained(adapter_dir)
-    tokenizer.save_pretrained(adapter_dir)
-
-    # ── 9. Save merged 16-bit model ────────────────────────────────────────────
-    merged_dir = os.path.join(args.output_dir, "merged_16bit")
-    logger.info(f"Saving merged 16-bit model to {merged_dir}")
-    model.save_pretrained_merged(
-        merged_dir,
-        tokenizer,
-        save_method="merged_16bit",
-    )
+    # ── 8. Save ────────────────────────────────────────────────────────────────
+    adapter_dir, merged_dir = _save_model(model, tokenizer, args.output_dir, logger)
 
     print("\n" + "=" * 60)
     print(f"  Final train loss : {train_loss:.4f}")

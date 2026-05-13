@@ -130,44 +130,55 @@ def export_via_llamacpp(merged_dir: str, output_dir: str, quantization: str) -> 
     os.makedirs(output_dir, exist_ok=True)
     gguf_stem = os.path.join(output_dir, "model")
 
-    print(f"Running llama.cpp conversion from {merged_dir} ...")
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Map quantization to llama.cpp --outtype values.
+    # q4_k_m / q5_k_m are not supported by convert_hf_to_gguf directly;
+    # use q8_0 as a single-pass output (~8 GB vs 16 GB for f16), then
+    # further quantize with llama-quantize if available.
+    outtype_map = {
+        "q8_0":   "q8_0",
+        "q5_k_m": "q8_0",   # intermediate; llama-quantize refines if present
+        "q4_k_m": "q8_0",   # intermediate; llama-quantize refines if present
+        "f16":    "f16",
+    }
+    outtype = outtype_map.get(quantization.lower(), "q8_0")
+    intermediate_gguf = os.path.join(output_dir, f"model_{outtype}.gguf")
+
+    print(f"Running llama.cpp conversion (outtype={outtype}) from {merged_dir} ...")
     cmd = [
         sys.executable,
         llamacpp_convert,
         merged_dir,
-        "--outfile", f"{gguf_stem}.gguf",
-        "--outtype", "f16",
+        "--outfile", intermediate_gguf,
+        "--outtype", outtype,
     ]
     result = subprocess.run(cmd, capture_output=False)
     if result.returncode != 0:
         print("llama.cpp conversion failed.")
         return None
 
-    f16_gguf = f"{gguf_stem}.gguf"
-    if not os.path.exists(f16_gguf):
-        f16_gguf = _find_gguf(output_dir)
+    if not os.path.exists(intermediate_gguf):
+        intermediate_gguf = _find_gguf(output_dir)
 
-    if not f16_gguf:
+    if not intermediate_gguf:
         print("ERROR: GGUF file not found after conversion.")
         return None
 
-    # Quantize with llama-quantize
-    llama_quantize = shutil.which("llama-quantize") or shutil.which("quantize")
-    if llama_quantize:
-        q_map = {
-            "q4_k_m": "Q4_K_M",
-            "q5_k_m": "Q5_K_M",
-            "q8_0":   "Q8_0",
-        }
-        quant_type = q_map.get(quantization.lower(), "Q4_K_M")
-        q_gguf = f"{gguf_stem}_{quant_type}.gguf"
-        print(f"Quantizing to {quant_type} ...")
-        q_result = subprocess.run([llama_quantize, f16_gguf, q_gguf, quant_type])
-        if q_result.returncode == 0 and os.path.exists(q_gguf):
-            os.remove(f16_gguf)
-            return q_gguf
+    # Try to refine quantization with llama-quantize (optional step)
+    if quantization.lower() not in ("f16", "q8_0"):
+        llama_quantize = shutil.which("llama-quantize") or shutil.which("quantize")
+        if llama_quantize:
+            q_map = {"q4_k_m": "Q4_K_M", "q5_k_m": "Q5_K_M"}
+            quant_type = q_map.get(quantization.lower(), "Q4_K_M")
+            q_gguf = os.path.join(output_dir, f"model_{quant_type}.gguf")
+            print(f"Quantizing {outtype} → {quant_type} ...")
+            q_result = subprocess.run([llama_quantize, intermediate_gguf, q_gguf, quant_type])
+            if q_result.returncode == 0 and os.path.exists(q_gguf):
+                os.remove(intermediate_gguf)
+                return q_gguf
 
-    return f16_gguf
+    return intermediate_gguf
 
 
 def main() -> None:

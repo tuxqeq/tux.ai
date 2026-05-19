@@ -101,6 +101,7 @@ temp/
 llm/data/
 llm/checkpoints/
 llm/exports/
+llm/export/
 *.gguf
 
 # Redis dump

@@ -1,0 +1,109 @@
+version: "3.9"
+
+services:
+
+  # ── PostgreSQL ──────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: tuxai
+      POSTGRES_USER: tuxai
+      POSTGRES_PASSWORD: tuxai
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tuxai"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── Redis ───────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:latest
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    command: redis-server --save 60 1 --loglevel warning
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ── Ollama (chat model) ─────────────────────────────────────────────────────
+  # Run locally instead if you have Apple Silicon:
+  #   ollama serve &  (or Ollama.app)
+  # Uncomment this block to run Ollama in Docker (CPU-only):
+  #
+  # ollama:
+  #   image: ollama/ollama:latest
+  #   restart: unless-stopped
+  #   volumes:
+  #     - ollama_data:/root/.ollama
+  #   ports:
+  #     - "11434:11434"
+
+  # ── FastAPI + gRPC backend ──────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://tuxai:tuxai@postgres:5432/tuxai
+      REDIS_URL: redis://redis:6379
+      MASTER_KEY: ${MASTER_KEY:-CHANGE_ME_MASTER_KEY_32_bytes!!!}
+      JWT_SECRET: ${JWT_SECRET:-CHANGE_ME_in_production_32_chars!!}
+      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: tux-ai-chat
+      MODEL_PATH: models/pii_model_advanced
+    volumes:
+      # Bind-mount local models so they don't need to be baked in
+      - ./models:/app/models:ro
+      - ./src:/app/src:ro
+    ports:
+      - "8000:8000"   # FastAPI REST
+      - "50051:50051" # gRPC (internal — accessed via Envoy)
+    command: >
+      sh -c "
+        python -m grpc_tools.protoc -I./proto --python_out=./api/grpc --grpc_python_out=./api/grpc proto/chat.proto &&
+        DATABASE_URL=postgresql+asyncpg://tuxai:tuxai@postgres:5432/tuxai alembic upgrade head &&
+        uvicorn api.main:app --host 0.0.0.0 --port 8000 --workers 1
+      "
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # ── Envoy gRPC-Web proxy ────────────────────────────────────────────────────
+  envoy:
+    image: envoyproxy/envoy:v1.31-latest
+    restart: unless-stopped
+    depends_on:
+      - api
+    volumes:
+      - ./envoy/envoy.yaml:/etc/envoy/envoy.yaml:ro
+    ports:
+      - "8080:8080"
+    command: envoy -c /etc/envoy/envoy.yaml
+
+  # ── React frontend ──────────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    restart: unless-stopped
+    depends_on:
+      - api
+      - envoy
+    ports:
+      - "3000:3000"
+
+volumes:
+  postgres_data:
+  redis_data:
+  # ollama_data:

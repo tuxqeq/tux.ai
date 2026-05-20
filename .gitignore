@@ -106,3 +106,10 @@ llm/export/
 
 # Redis dump
 dump.rdb
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Alembic
+alembic/versions/*.pyc

@@ -1,0 +1,33 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# System deps for cryptography and grpcio compilation
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc g++ libffi-dev libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt requirements.api.txt ./
+RUN pip install --no-cache-dir -r requirements.txt -r requirements.api.txt
+
+# Generate gRPC Python stubs from proto
+RUN pip install --no-cache-dir grpcio-tools
+COPY proto/ ./proto/
+RUN python -m grpc_tools.protoc \
+    -I./proto \
+    --python_out=./api/grpc \
+    --grpc_python_out=./api/grpc \
+    proto/chat.proto
+
+# Copy source
+COPY src/ ./src/
+COPY api/ ./api/
+COPY alembic/ ./alembic/
+COPY alembic.ini .
+
+# Models are bind-mounted at runtime in dev; baked in for production builds.
+# COPY models/ ./models/
+
+EXPOSE 8000 50051
+
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

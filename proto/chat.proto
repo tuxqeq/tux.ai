@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+package chat;
+
+option java_package = "ai.tux.chat";
+option java_outer_classname = "ChatProto";
+
+service ChatService {
+    rpc StreamChat(ChatRequest) returns (stream ChatChunk);
+}
+
+message ChatRequest {
+    string chat_session_id = 1;
+    string message          = 2;
+    string dataset_id       = 3;
+    string auth_token       = 4;  // JWT — sent in gRPC metadata header
+}
+
+message ChatChunk {
+    // Text content of this chunk. Tokens in [LABEL_hexid] format are either
+    // replaced with plaintext (if user has RBAC access) or kept as-is.
+    string content = 1;
+    bool   done    = 2;
+    string error   = 3;  // non-empty only on terminal error
+}

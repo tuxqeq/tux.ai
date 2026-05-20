@@ -24,49 +24,82 @@ fi
 
 # ── Docker infrastructure ──────────────────────────────────────────────────────
 
-echo "[infra] Starting PostgreSQL on :5432..."
-docker volume create tuxai-postgres-data 2>/dev/null || true
-docker run -d --rm --name tuxai-postgres \
-    -e POSTGRES_DB=tuxai \
-    -e POSTGRES_USER=tuxai \
-    -e POSTGRES_PASSWORD=tuxai \
-    -p 5432:5432 \
-    -v tuxai-postgres-data:/var/lib/postgresql/data \
-    postgres:16-alpine \
-    2>/dev/null || echo "  PostgreSQL container already running."
+if docker info >/dev/null 2>&1; then
+    # ── Docker mode ───────────────────────────────────────────────────────────
+    echo "[infra] Starting PostgreSQL on :5432..."
+    docker volume create tuxai-postgres-data 2>/dev/null || true
+    docker run -d --rm --name tuxai-postgres \
+        -e POSTGRES_DB=tuxai \
+        -e POSTGRES_USER=tuxai \
+        -e POSTGRES_PASSWORD=tuxai \
+        -p 5432:5432 \
+        -v tuxai-postgres-data:/var/lib/postgresql/data \
+        postgres:16-alpine \
+        2>/dev/null || echo "  PostgreSQL container already running."
 
-echo "[infra] Starting Redis on :6379..."
-docker volume create tuxai-redis-data 2>/dev/null || true
-docker run -d --rm --name tuxai-redis \
-    -p 6379:6379 \
-    -v tuxai-redis-data:/data \
-    redis:latest \
-    redis-server --save 60 1 --loglevel warning \
-    2>/dev/null || echo "  Redis container already running."
+    echo "[infra] Starting Redis on :6379..."
+    docker volume create tuxai-redis-data 2>/dev/null || true
+    docker run -d --rm --name tuxai-redis \
+        -p 6379:6379 \
+        -v tuxai-redis-data:/data \
+        redis:latest \
+        redis-server --save 60 1 --loglevel warning \
+        2>/dev/null || echo "  Redis container already running."
 
-echo "[infra] Starting Envoy gRPC-Web proxy on :8080..."
-docker run -d --rm --name tuxai-envoy \
-    -p 8080:8080 \
-    -v "$ROOT/envoy/envoy.local.yaml:/etc/envoy/envoy.yaml:ro" \
-    --add-host=host.docker.internal:host-gateway \
-    envoyproxy/envoy:v1.31-latest \
-    envoy -c /etc/envoy/envoy.yaml \
-    2>/dev/null || echo "  Envoy container already running."
+    echo "[infra] Starting Envoy gRPC-Web proxy on :8080..."
+    docker run -d --rm --name tuxai-envoy \
+        -p 8080:8080 \
+        -v "$ROOT/envoy/envoy.local.yaml:/etc/envoy/envoy.yaml:ro" \
+        --add-host=host.docker.internal:host-gateway \
+        envoyproxy/envoy:v1.31-latest \
+        envoy -c /etc/envoy/envoy.yaml \
+        2>/dev/null || echo "  Envoy container already running."
 
-# ── Wait for PostgreSQL to be ready ───────────────────────────────────────────
+    echo "[infra] Waiting for PostgreSQL to accept connections..."
+    for i in $(seq 1 20); do
+        if docker exec tuxai-postgres pg_isready -U tuxai -q 2>/dev/null; then
+            echo "  PostgreSQL ready."
+            break
+        fi
+        if [ "$i" -eq 20 ]; then
+            echo "  ERROR: PostgreSQL did not become ready in time."
+            exit 1
+        fi
+        sleep 1
+    done
+else
+    # ── Native mode (no Docker — Vast.ai / RunPod) ────────────────────────────
+    echo "[infra] Docker not available — using native services."
 
-echo "[infra] Waiting for PostgreSQL to accept connections..."
-for i in $(seq 1 20); do
-    if docker exec tuxai-postgres pg_isready -U tuxai -q 2>/dev/null; then
-        echo "  PostgreSQL ready."
-        break
+    echo "[infra] Starting PostgreSQL..."
+    service postgresql start 2>/dev/null || true
+    echo "[infra] Starting Redis..."
+    service redis-server start 2>/dev/null || redis-server --daemonize yes --logfile /tmp/redis.log 2>/dev/null || true
+
+    echo "[infra] Waiting for PostgreSQL to accept connections..."
+    for i in $(seq 1 20); do
+        if pg_isready -U tuxai -q 2>/dev/null; then
+            echo "  PostgreSQL ready."
+            break
+        fi
+        if [ "$i" -eq 20 ]; then
+            echo "  ERROR: PostgreSQL did not become ready in time."
+            exit 1
+        fi
+        sleep 1
+    done
+
+    echo "[infra] Starting Envoy gRPC-Web proxy on :8080..."
+    if command -v envoy &>/dev/null; then
+        ENVOY_YAML="$ROOT/envoy/envoy.local.yaml"
+        [ -f "$ENVOY_YAML" ] || ENVOY_YAML="$ROOT/envoy/envoy.yaml"
+        envoy -c "$ENVOY_YAML" --log-level warn &
+        echo "  Envoy started."
+    else
+        echo "  WARNING: envoy not found — gRPC-Web streaming will not work."
+        echo "    Install: wget https://github.com/envoyproxy/envoy/releases/download/v1.31.0/envoy-1.31.0-linux-x86_64 -O /usr/local/bin/envoy && chmod +x /usr/local/bin/envoy"
     fi
-    if [ "$i" -eq 20 ]; then
-        echo "  ERROR: PostgreSQL did not become ready in time."
-        exit 1
-    fi
-    sleep 1
-done
+fi
 
 # Override DATABASE_URL to use localhost (container publishes :5432)
 export DATABASE_URL="postgresql+asyncpg://tuxai:tuxai@localhost:5432/tuxai"
@@ -130,21 +163,33 @@ fi
 echo "[api] Starting FastAPI on :8000..."
 DATABASE_URL="postgresql+asyncpg://tuxai:tuxai@localhost:5432/tuxai" \
 REDIS_URL="redis://localhost:6379" \
-uvicorn api.main:app --reload --port 8000 &
+uvicorn api.main:app --reload --host 0.0.0.0 --port 8000 &
 API_PID=$!
 
 # ── Start frontend ─────────────────────────────────────────────────────────────
 
-echo "[frontend] Starting Vite dev server on :5173..."
-cd frontend && npm run dev &
-FRONTEND_PID=$!
-cd "$ROOT"
+if docker info >/dev/null 2>&1; then
+    # Local dev — use Vite hot-reload
+    echo "[frontend] Starting Vite dev server on :5173..."
+    cd frontend && npm run dev &
+    FRONTEND_PID=$!
+    cd "$ROOT"
+    FRONTEND_URL="http://localhost:5173"
+else
+    # Pod / server — build once and serve statically on :3000
+    echo "[frontend] Building for production..."
+    (cd frontend && npm run build --silent)
+    echo "[frontend] Serving on :3000..."
+    npx --yes serve frontend/dist -l 3000 &
+    FRONTEND_PID=$!
+    FRONTEND_URL="http://0.0.0.0:3000"
+fi
 
 echo ""
 echo "  ┌──────────────────────────────────────────┐"
-echo "  │  App       →  http://localhost:5173       │"
-echo "  │  API       →  http://localhost:8000       │"
-echo "  │  gRPC-Web  →  http://localhost:8080       │"
+printf  "  │  App       →  %-27s│\n" "$FRONTEND_URL"
+echo "  │  API       →  http://0.0.0.0:8000        │"
+echo "  │  gRPC-Web  →  http://0.0.0.0:8080        │"
 echo "  └──────────────────────────────────────────┘"
 echo ""
 echo "  Admin:  admin@tux.ai / admin"

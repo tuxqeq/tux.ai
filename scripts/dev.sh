@@ -24,7 +24,7 @@ fi
 
 # ── Docker infrastructure ──────────────────────────────────────────────────────
 
-if docker info >/dev/null 2>&1; then
+if [ -S /var/run/docker.sock ] && docker info >/dev/null 2>&1; then
     # ── Docker mode ───────────────────────────────────────────────────────────
     echo "[infra] Starting PostgreSQL on :5432..."
     docker volume create tuxai-postgres-data 2>/dev/null || true
@@ -168,7 +168,7 @@ API_PID=$!
 
 # ── Start frontend ─────────────────────────────────────────────────────────────
 
-if docker info >/dev/null 2>&1; then
+if [ -S /var/run/docker.sock ] && docker info >/dev/null 2>&1; then
     # Local dev — use Vite hot-reload
     echo "[frontend] Starting Vite dev server on :5173..."
     cd frontend && npm run dev &

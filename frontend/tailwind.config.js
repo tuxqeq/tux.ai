@@ -5,17 +5,17 @@ export default {
     extend: {
       colors: {
         surface: {
-          DEFAULT: "#0f1117",
-          raised: "#1a1d27",
-          overlay: "#22263a",
+          DEFAULT: "#000000",
+          raised: "#0d0d0d",
+          overlay: "#1a1a1a",
         },
         accent: {
-          DEFAULT: "#6366f1",
-          hover: "#4f52d9",
+          DEFAULT: "#f9a8c9",
+          hover: "#f472b6",
         },
         token: {
-          visible: "#10b981",    // green — decrypted, user has access
-          redacted: "#6b7280",   // grey — placeholder, no access
+          visible: "#10b981",
+          redacted: "#6b7280",
         },
       },
       fontFamily: {

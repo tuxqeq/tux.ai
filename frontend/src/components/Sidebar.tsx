@@ -16,7 +16,7 @@ function formatDate(iso: string) {
   return d.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
-export function Sidebar({ activeId, onSelect, onNew }: Props) {
+export function Sidebar({ activeId, onSelect, onNew }: Readonly<Props>) {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -32,44 +32,67 @@ export function Sidebar({ activeId, onSelect, onNew }: Props) {
   };
 
   return (
-    <aside className="flex h-full w-64 flex-col border-r border-white/10 bg-surface">
-      <div className="flex items-center justify-between p-4 border-b border-white/10">
-        <span className="text-sm font-semibold tracking-wide text-white/80">tux.ai</span>
+    <aside className="flex h-full w-64 shrink-0 flex-col border-r border-white/6 bg-surface-raised">
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-4">
+        <span className="text-sm font-semibold tracking-tight">
+          tux<span className="text-accent">.ai</span>
+        </span>
         <button
           onClick={onNew}
-          className="rounded-lg p-1.5 text-white/60 hover:bg-surface-overlay hover:text-white transition-colors"
+          className="flex h-7 w-7 items-center justify-center rounded-lg text-white/30 transition-colors hover:bg-white/6 hover:text-white"
           title="New chat"
         >
           <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
-            <path fillRule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clipRule="evenodd" />
+            <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z" />
           </svg>
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto py-2">
+      {/* New chat row */}
+      <div className="px-2 pb-2">
+        <button
+          onClick={onNew}
+          className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-white/35 transition-colors hover:bg-white/5 hover:text-white/60"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+            <path fillRule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clipRule="evenodd" />
+          </svg>
+          <span>New chat</span>
+        </button>
+      </div>
+
+      {/* Session list */}
+      <div className="flex-1 overflow-y-auto px-2 py-1">
         {loading && (
-          <p className="px-4 py-2 text-xs text-white/30">Loading…</p>
+          <p className="px-3 py-2 text-xs text-white/20">Loading…</p>
         )}
         {!loading && sessions.length === 0 && (
-          <p className="px-4 py-4 text-xs text-white/30 text-center">No chats yet</p>
+          <p className="px-3 py-8 text-center text-xs text-white/20">No conversations yet</p>
         )}
         {sessions.map((s) => (
           <div
             key={s.id}
+            role="button"
+            tabIndex={0}
             onClick={() => onSelect(s.id)}
-            className={`group flex cursor-pointer items-center justify-between px-3 py-2 mx-2 rounded-lg transition-colors ${
+            onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && onSelect(s.id)}
+            className={`group relative flex cursor-pointer items-center justify-between rounded-lg px-3 py-2.5 transition-colors ${
               activeId === s.id
-                ? "bg-accent/20 text-white"
-                : "text-white/60 hover:bg-surface-raised hover:text-white"
+                ? "bg-white/6 text-white"
+                : "text-white/45 hover:bg-white/4 hover:text-white/75"
             }`}
           >
+            {activeId === s.id && (
+              <span className="absolute left-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-r-full bg-accent" />
+            )}
             <div className="min-w-0 flex-1">
-              <p className="truncate text-sm">{s.title ?? "Chat"}</p>
-              <p className="text-xs opacity-50">{formatDate(s.updated_at)}</p>
+              <p className="truncate text-sm">{s.title ?? "New chat"}</p>
+              <p className="mt-0.5 text-xs opacity-40">{formatDate(s.updated_at)}</p>
             </div>
             <button
               onClick={(e) => handleDelete(e, s.id)}
-              className="ml-2 hidden group-hover:block rounded p-0.5 text-white/40 hover:text-red-400 transition-colors"
+              className="ml-2 hidden shrink-0 rounded p-0.5 text-white/20 transition-colors hover:text-white/60 group-hover:block"
               title="Delete"
             >
               <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor">

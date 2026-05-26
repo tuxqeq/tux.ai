@@ -2,6 +2,14 @@ import { useCallback, useRef, useState } from "react";
 import { streamChat } from "@/lib/grpc-client";
 import type { Message } from "@/lib/api";
 
+function uuid(): string {
+  if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    return (c === "x" ? r : (r & 0x3) | 0x8).toString(16);
+  });
+}
+
 export interface UseChatOptions {
   sessionId: string;
   datasetId: string;
@@ -19,7 +27,7 @@ export function useChat({ sessionId, datasetId, onSessionCreated }: UseChatOptio
       if (!text.trim() || streaming) return;
 
       const userMsg: Message = {
-        id: crypto.randomUUID(),
+        id: uuid(),
         role: "user",
         content: text,
         created_at: new Date().toISOString(),
@@ -30,7 +38,7 @@ export function useChat({ sessionId, datasetId, onSessionCreated }: UseChatOptio
       setError(null);
 
       // Placeholder for assistant response — will be updated as chunks arrive
-      const assistantId = crypto.randomUUID();
+      const assistantId = uuid();
       setMessages((prev) => [
         ...prev,
         { id: assistantId, role: "assistant", content: "", created_at: new Date().toISOString() },

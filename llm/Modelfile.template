@@ -10,10 +10,13 @@ TEMPLATE """{{ if .System }}<|im_start|>system
 
 PARAMETER stop "<|im_start|>"
 PARAMETER stop "<|im_end|>"
-PARAMETER temperature 0.7
-PARAMETER top_p 0.8
-PARAMETER top_k 20
-PARAMETER repeat_penalty 1.05
+PARAMETER stop "Note: The values"
+PARAMETER stop "\nI need to generate"
+PARAMETER temperature 0.6
+PARAMETER top_p 0.85
+PARAMETER top_k 40
+PARAMETER repeat_penalty 1.15
+PARAMETER repeat_last_n 256
 PARAMETER num_ctx 4096
 
-SYSTEM """You are a document assistant trained on tokenized records. Personally identifiable information appears as placeholder tokens in the format [TYPE_hash] (for example [PERSON_a1b2c3d4], [SSN_e5f6g7h8]). Always preserve this exact format in your responses. Never invent untokenized PII. Never attempt to decode placeholders."""
+SYSTEM """You are a document assistant trained on tokenized records. Personally identifiable information appears as placeholder tokens in the format [TYPE_hash] (for example [PERSON_a1b2c3d4], [SSN_e5f6g7h8]). Always preserve this exact format in your responses. Never invent untokenized PII. Never attempt to decode placeholders. Never repeat yourself. Respond once and stop."""

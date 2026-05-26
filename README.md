@@ -1,299 +1,239 @@
-# 🔐 tux.ai - Hybrid PII Detection & Encryption System
+# tux.ai
 
-Advanced AI-powered system for detecting and encrypting Personally Identifiable Information (PII) using a hybrid approach combining:
-- **AI Model**: Fine-tuned transformer for contextual PII detection
-- **Presidio**: Rule-based pattern matching for structured data (SSN, credit cards, emails, etc.)
-
-## 🚀 Features
-
-- **12+ PII Types**: Names, emails, phones, SSN, credit cards, addresses, DOB, passports, IPs, medical records, bank accounts, usernames
-- **Hybrid Detection**: Combines AI contextual understanding with regex pattern matching
-- **AES Encryption**: Reversible encryption of detected PII
-- **High Accuracy**: Trained on 100K+ samples with 40% negative examples to reduce false positives
-- **Customizable**: Adjustable AI confidence thresholds, Presidio-only mode, custom encryption keys
+Privacy-preserving AI chat platform. PII is detected, tokenized, and never stored in plaintext — the chat model (Qwen3-8B via Ollama) works entirely on tokenized data. Authorized users can decrypt tokens on the fly through a role-based access control layer.
 
 ---
 
-## 📋 Prerequisites
+## Architecture
 
-- Python 3.11+
-- macOS, Linux, or Windows
-- 8GB+ RAM recommended for training
+```
+React (TypeScript + Tailwind)
+  └─ REST (auth/admin)  →  FastAPI
+  └─ gRPC-Web           →  Envoy  →  gRPC  →  FastAPI + gRPC servicer
+                                                  ├─ PostgreSQL (sessions, RBAC, audit)
+                                                  ├─ Redis (token recovery map)
+                                                  └─ Ollama (tux-ai-chat)
+
+PII pipeline (Python):  Presidio + fine-tuned DistilBERT → tokenizer → [LABEL_hexid]
+LLM pipeline (Python):  synthetic docs → tokenize → QLoRA fine-tune → GGUF → Ollama
+```
+
+**Detection**: Hybrid rule-based (Presidio, 23+ custom recognizers) + contextual AI (fine-tuned DistilBERT token classifier). Spans are merged and deduplicated.
+
+**Tokenization**: PII is replaced with `[LABEL_hexid]` placeholders. The original values are AES-encrypted and stored in Redis. The plaintext AES key is wrapped with a server `MASTER_KEY` (AES-256-GCM) and stored in Postgres — plaintext PII never touches the database.
+
+**Chat**: The model is trained on tokenized text only. At chat time, authorized users' tokens are decrypted inline; unauthorized users see the placeholders.
+
+**RBAC**: Per-user, per-dataset, per-entity-type grants. Admins get a wildcard grant automatically. Every decryption is written to an audit log.
 
 ---
 
-## ⚙️ Installation
+## Services
 
-### 1. Clone Repository
+| Service | Port | Purpose |
+|---------|------|---------|
+| FastAPI | 8000 | REST API (auth, admin, chats) |
+| gRPC | 50051 | Streaming chat service (internal) |
+| Envoy | 8080 | gRPC-Web proxy for the browser |
+| Frontend | 3000 | React SPA |
+| Postgres | 5432 | Users, datasets, RBAC, sessions, audit |
+| Redis | 6379 | Token → encrypted-value recovery map |
+| Ollama | 11434 | LLM inference (`tux-ai-chat`) |
+
+---
+
+## Quick Start
+
+### Prerequisites
+
+- Docker + Docker Compose
+- [Ollama](https://ollama.com) running locally (or uncomment the `ollama` service in `docker-compose.yml`)
+- A trained `tux-ai-chat` Ollama model (see [LLM pipeline](#llm-fine-tuning-pipeline) below)
+- A PII model in `models/` (see [PII model](#pii-detection-model) below, or use Presidio-only mode)
+
+### 1. Configure environment
+
 ```bash
-git clone <your-repo-url>
-cd tux.ai
+cp .env.example .env.local
+# Edit .env.local — at minimum set MASTER_KEY and JWT_SECRET to random 32-char strings
 ```
 
-### 2. Create Virtual Environment
+### 2. Run setup script (first time only)
+
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+python setup_chat.py
 ```
 
-### 3. Install Dependencies
+This runs Alembic migrations, creates the first admin user, and seeds a default dataset.
+
+### 3. Start all services
+
 ```bash
-pip install -r requirements.txt
+docker compose up --build
 ```
 
-### 4. Download Spacy Language Model
+Frontend at `http://localhost:3000`. API docs at `http://localhost:8000/api/health`.
+
+### Local development (without Docker)
+
 ```bash
-python -m spacy download en_core_web_lg
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt -r requirements.api.txt
+
+# Start dependencies (Postgres, Redis, Ollama)
+brew services start postgresql redis
+ollama serve &
+
+# Run migrations
+alembic upgrade head
+
+# Start API
+uvicorn api.main:app --reload
+
+# Start frontend
+cd frontend && npm install && npm run dev
 ```
 
 ---
 
-## 🎯 Quick Start
+## PII Detection Model
 
-### Option 1: Use Pre-trained Models (Fast)
+### Supported entity types
 
-If you have trained models in `models/`, skip to usage:
+**Presidio built-ins**: `PERSON`, `EMAIL_ADDRESS`, `PHONE_NUMBER`, `CREDIT_CARD`, `CRYPTO`, `IBAN_CODE`, `IP_ADDRESS`, `NRP`, `LOCATION`, `US_BANK_NUMBER`, `US_DRIVER_LICENSE`, `US_ITIN`, `US_PASSPORT`, `US_SSN`, `UK_NHS`, `MEDICAL_LICENSE`, `URL`
+
+**Custom recognizers** (`src/recognizers.py`): `PROJECT_ID`, `PASSPORT_NUMBER`, `DRIVERS_LICENSE`, `MEDICAL_RECORD_NUMBER`, `BANK_ACCOUNT`, `INSURANCE_NUMBER`, `EMPLOYEE_ID`, `DATE_OF_BIRTH`, `TAX_ID`, `VIN`, `API_KEY`, `USERNAME`, `MAC_ADDRESS`, `SECURITY_BADGE`, `GRANT_NUMBER`, `AWS_KEY`, `SERVICE_API_KEY`, `DB_CONNECTION`, `LICENSE_PLATE`, `PROFESSIONAL_LICENSE`, `CVV`, `MEDICARE_NUMBER`, `PATENT_NUMBER`
+
+**AI model labels**: `PER`, `ORG`, `LOC`, `EMAIL`, `PHONE`, `SSN`, `CREDIT_CARD`, `DOB`, `LICENSE`, `PASSPORT`, `IP_ADDRESS`, `MRN`, `BANK_ACCOUNT`, `USERNAME`, `VIN`, `API_KEY`, `MAC`, `EMP_ID`, `INSURANCE`
+
+### Train from scratch
 
 ```bash
-# Detect PII only
-python src/hybrid_detect.py --text "Contact John Doe at john@email.com or 555-1234"
-
-# Detect and encrypt PII
-python src/hybrid_detect.py --text "SSN: 123-45-6789" --encrypt
-
-# Process a file
-python src/hybrid_detect.py --file document.txt --encrypt --output encrypted.txt
-```
-
-### Option 2: Train From Scratch
-
-#### Step 1: Generate Training Data
-```bash
-# Generate 100,000 training samples (recommended for production)
+# Generate training data
 python src/generate_data.py --count 100000 --output data/train_data_large.json
 
-# Or generate smaller dataset for testing
-python src/generate_data.py --count 10000 --output data/train_data_test.json
-```
-
-#### Step 2: Train the Model
-```bash
-# Full training (recommended)
+# Train (Apple Silicon uses MPS automatically; ~30-60 min for 100K samples)
 python src/train.py --data_file data/train_data_large.json --epochs 5 --output_dir models/pii_model_large
 
-# Quick training for testing
-python src/train.py --data_file data/train_data_test.json --epochs 3 --output_dir models/pii_model_test
-
-# Smoke test (minimal training)
+# Smoke test
 python src/train.py --smoke_test
 ```
 
-**Training Notes:**
-- On Apple Silicon (M1/M2/M3): Uses MPS GPU acceleration automatically
-- 100K samples takes ~30-60 minutes on modern hardware
-- Models saved in `models/` directory with checkpoints
+### CLI usage
 
-#### Step 3: Test Detection
 ```bash
-python src/hybrid_detect.py --model_path models/pii_model_large --text "Patient Jane Smith, DOB 01/15/1990, SSN 987-65-4321"
+# Detect PII
+python src/hybrid_detect.py --text "Contact John at john@email.com"
+
+# Detect and AES-encrypt
+python src/hybrid_detect.py --file document.txt --encrypt --output encrypted.txt
+
+# Presidio-only (no AI model, faster)
+python src/hybrid_detect.py --text "SSN: 123-45-6789" --no-ai
+
+# Tokenize a file (PII → [LABEL_hexid], recovery map in Redis)
+python src/tokenize_file.py --input data.txt --key "32ByteSecureKeyForAES256!!!!!!!"
 ```
 
 ---
 
-## 📖 Usage Guide
+## LLM Fine-Tuning Pipeline
 
-### Detection Only
+Fine-tunes **Qwen3-8B** (QLoRA, 4-bit) on tokenized PII data so the chat model never sees raw PII. Requires a CUDA GPU with ≥16 GB VRAM (or use `--base-model unsloth/Qwen3-4B` for ~10 GB).
 
-**Interactive mode:**
 ```bash
-python src/hybrid_detect.py
-# Enter text when prompted, type 'exit' to quit
+pip install -r requirements-llm.txt
 ```
 
-**Single text analysis:**
+### Five-step pipeline
+
 ```bash
-python src/hybrid_detect.py --text "Email me at alice@company.com"
+# 1. Generate synthetic documents (Faker, 5 persona types)
+python llm/generate_synthetic_docs.py --count 1000
+
+# 2. Tokenize docs, securely wipe raw originals (Redis must be running)
+python llm/prepare_corpus.py
+
+# 3. Build multi-turn chat dataset (90/10 train/val split)
+python llm/build_chat_dataset.py
+
+# 4. Fine-tune (saves adapter + merged 16-bit weights)
+python llm/train_qlora.py \
+    --train-file llm/data/chat/train.jsonl \
+    --val-file   llm/data/chat/val.jsonl
+
+# 5. Export to GGUF and register with Ollama
+python llm/export_to_gguf.py \
+    --merged-model-dir llm/checkpoints/run_001/merged_16bit/
+# Follow the printed `ollama create` commands
 ```
 
-**File analysis:**
+Quick sanity run (before scaling up):
 ```bash
-python src/hybrid_detect.py --file sensitive_data.txt
+python llm/generate_synthetic_docs.py --count 20
+python llm/prepare_corpus.py
+python llm/build_chat_dataset.py --examples-per-doc 4
+python llm/train_qlora.py --train-file llm/data/chat/train.jsonl --val-file llm/data/chat/val.jsonl --epochs 1
 ```
 
-### Detection + Encryption
-
-**Encrypt text:**
-```bash
-python src/hybrid_detect.py --text "Credit card: 4532-1234-5678-9010" --encrypt
-```
-
-**Encrypt file:**
-```bash
-python src/hybrid_detect.py --file data.txt --encrypt --output encrypted_data.txt
-```
-
-**Custom encryption key:**
-```bash
-python src/hybrid_detect.py --file data.txt --encrypt --key "MySecure16ByteKey"
-# Key must be 16, 24, or 32 bytes
-```
-
-### Advanced Options
-
-**Presidio-only mode** (no AI, faster, fewer false positives):
-```bash
-python src/hybrid_detect.py --file data.txt --encrypt --no-ai
-```
-
-**Adjust AI confidence threshold** (default: 0.95):
-```bash
-python src/hybrid_detect.py --text "Data here" --ai-threshold 0.99
-# Higher = fewer detections but more accurate
-```
-
-**Use different model:**
-```bash
-python src/hybrid_detect.py --model_path models/pii_model_advanced --text "Test data"
-```
+See [llm/README.md](llm/README.md) for hardware fallback, Qwen3 thinking mode, and upload to HuggingFace.
 
 ---
 
-## 🏗️ Project Structure
+## Security Notes
+
+- **MASTER_KEY** encrypts all dataset AES keys at rest (AES-256-GCM). Rotate it only with a migration.
+- **JWT_SECRET** signs access (8h) and refresh (7d) tokens.
+- **CSRF** double-submit cookie on all state-changing REST endpoints.
+- **Messages** are stored tokenized — plaintext PII never reaches Postgres.
+- **Audit log** records every token decryption (user, token, dataset, timestamp).
+- **Rate limiting**: 10 req/min on `/login`, 30 req/min on chat endpoints.
+
+---
+
+## Project Structure
 
 ```
 tux.ai/
-├── data/                          # Training datasets
-│   ├── train_data.json           # Small dataset
-│   ├── train_data_advanced.json  # Medium dataset
-│   ├── train_data_full.json      # Large dataset
-│   └── train_data_large.json     # 100K samples (generated)
-├── models/                        # Trained models
-│   ├── pii_model/                # Base model
-│   ├── pii_model_advanced/       # Intermediate model
-│   ├── pii_model_full/           # Full model
-│   └── pii_model_large/          # Production model (100K samples)
-├── src/                           # Source code
-│   ├── generate_data.py          # Synthetic data generator
-│   ├── train.py                  # Model training pipeline
-│   ├── inference.py              # Simple inference (AI only)
-│   └── hybrid_detect.py          # Hybrid detection + encryption
-├── notebooks/                     # Jupyter experiments
-├── encrypt_pii.py                # Presidio-only encryption (legacy)
-├── requirements.txt              # Python dependencies
-├── README.md                     # This file
-└── .gitignore                    # Git ignore rules
+├── api/                   # FastAPI + gRPC backend
+│   ├── main.py            # App factory, middleware, gRPC lifecycle
+│   ├── models.py          # SQLAlchemy ORM (User, Dataset, RBAC, Chat, Audit)
+│   ├── security.py        # bcrypt, JWT, CSRF, AES-GCM master-key wrap/unwrap
+│   ├── config.py          # Pydantic settings (.env.local)
+│   ├── routers/           # auth, admin, chats
+│   └── grpc/              # gRPC servicer (streaming chat)
+├── frontend/              # React 18 + TypeScript + Tailwind + gRPC-Web
+├── proto/chat.proto        # ChatService protobuf definition
+├── envoy/                 # Envoy gRPC-Web proxy config
+├── llm/                   # Qwen3-8B fine-tuning pipeline
+│   ├── generate_synthetic_docs.py
+│   ├── prepare_corpus.py
+│   ├── build_chat_dataset.py
+│   ├── train_qlora.py
+│   └── export_to_gguf.py
+├── src/                   # PII detection / tokenization library
+│   ├── hybrid_detect.py   # HybridDetector (Presidio + DistilBERT)
+│   ├── recognizers.py     # 23 custom PatternRecognizers
+│   ├── pseudonymize.py    # PIIPseudonymizer (token → recovery map)
+│   ├── tokenize_file.py   # Batch file processor
+│   ├── train.py           # DistilBERT fine-tuning
+│   └── generate_data.py   # BIO-tagged synthetic training data
+├── alembic/               # DB migrations
+├── docker-compose.yml
+├── Dockerfile.api
+├── Dockerfile.frontend
+├── requirements.txt       # PII pipeline deps
+├── requirements.api.txt   # API server deps
+├── requirements-llm.txt   # LLM fine-tuning deps
+└── .env.example
 ```
 
 ---
 
-## 🧪 Training Data Details
+## Acknowledgments
 
-### Generated Data Includes:
-- **Names (PER)**: Contextual person names
-- **Emails (EMAIL)**: Standard email addresses
-- **Phones (PHONE)**: Various phone formats
-- **SSN (SSN)**: Social Security Numbers
-- **Credit Cards (CREDIT_CARD)**: Card numbers
-- **Addresses (LOC)**: Physical addresses
-- **Organizations (ORG)**: Company names
-- **DOB (DOB)**: Dates of birth
-- **Licenses (LICENSE)**: Driver licenses
-- **Passports (PASSPORT)**: Passport numbers
-- **IPs (IP_ADDRESS)**: IP addresses
-- **Medical Records (MRN)**: Medical record numbers
-- **Bank Accounts (BANK_ACCOUNT)**: Account numbers
-- **Usernames (USERNAME)**: User login names
-
-### Negative Examples (40%):
-Sentences without PII to prevent false positives:
-- "The company is doing well."
-- "Personal information should be protected."
-- "Contact information has been updated."
-- 60+ variations to teach context
-
----
-
-## 🔧 Configuration
-
-### Training Parameters
-
-Edit in `src/train.py` or pass as arguments:
-- `--epochs`: Number of training iterations (default: 3, recommended: 5)
-- `--data_file`: Path to training data JSON
-- `--output_dir`: Where to save trained model
-- `--smoke_test`: Quick test with minimal data
-
-### Detection Parameters
-
-- `--model_path`: Path to AI model (default: `models/pii_model_advanced`)
-- `--no-ai`: Disable AI, use Presidio only
-- `--ai-threshold`: Confidence threshold (0.0-1.0, default: 0.95)
-- `--encrypt`: Enable encryption
-- `--key`: AES encryption key (16/24/32 bytes)
-- `--output`: Output file path
-
----
-
-## 📊 Performance
-
-### Model Metrics
-- **Precision**: High (specific entity types, negative samples reduce false positives)
-- **Recall**: High (hybrid approach catches both contextual and pattern-based PII)
-- **Speed**: ~1000 tokens/sec on Apple M1
-
-### Presidio Coverage
-- Email, Phone, SSN, Credit Cards, IPs, URLs
-- Dates, Locations, Person Names, Organizations
-- Medical licenses, Bank accounts, Passports
-
----
-
-## 🛠️ Troubleshooting
-
-### Model Over-detecting (encrypting normal words)
-**Solution**: Use Presidio-only mode or increase AI threshold
-```bash
-python src/hybrid_detect.py --file data.txt --no-ai --encrypt
-# OR
-python src/hybrid_detect.py --file data.txt --ai-threshold 0.99 --encrypt
-```
-
-### Training Warnings (MPS pin_memory)
-**Safe to ignore** - Apple Silicon GPU acceleration works despite warning
-
-### Out of Memory During Training
-**Solution**: Reduce batch size in `src/train.py` or use smaller dataset
-
-### Presidio Not Detecting SSN/Credit Cards
-**Solution**: Ensure Spacy model is installed
-```bash
-python -m spacy download en_core_web_lg
-```
-
----
-
-## 🤝 Contributing
-
-1. Generate better training data with `src/generate_data.py`
-2. Add new PII types in templates
-3. Improve hybrid detection logic in `src/hybrid_detect.py`
-4. Submit pull requests!
-
----
-
-## 📄 License
-
-[Your License Here]
-
----
-
-## 🙏 Acknowledgments
-
-- **Hugging Face Transformers**: Model architecture
-- **Microsoft Presidio**: Rule-based PII detection
-- **Spacy**: NLP models
-- **Faker**: Synthetic data generation
-
----
-
-**Built with ❤️ for data privacy and security**
+- [Microsoft Presidio](https://github.com/microsoft/presidio) — rule-based PII detection
+- [Hugging Face Transformers](https://github.com/huggingface/transformers) — DistilBERT + Qwen3
+- [Unsloth](https://github.com/unslothai/unsloth) — QLoRA fine-tuning
+- [Ollama](https://ollama.com) — local LLM inference
+- [Faker](https://github.com/joke2k/faker) — synthetic data generation

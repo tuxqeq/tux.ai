@@ -11,6 +11,7 @@ Redis is pinged at startup; the script exits if Redis is unreachable.
 """
 
 import argparse
+import json
 import os
 import shutil
 import sys
@@ -26,6 +27,7 @@ DEFAULT_INPUT_DIR = os.path.join(_REPO_ROOT, "llm", "data", "raw_temp")
 DEFAULT_OUTPUT_DIR = os.path.join(_REPO_ROOT, "llm", "data", "tokenized")
 DEFAULT_AES_KEY = "16ByteSecureKey!"
 DEFAULT_MODEL_PATH = os.path.join(_REPO_ROOT, "models", "pii_model_v2")
+DEFAULT_MAP_PATH = os.path.join(_REPO_ROOT, "llm", "data", "token_map.json")
 
 
 def _secure_delete(path: str) -> None:
@@ -40,7 +42,7 @@ def _secure_delete(path: str) -> None:
 
 def _secure_delete_dir(directory: str) -> None:
     """Securely delete every file in directory, then rmtree the shell."""
-    for root, dirs, files in os.walk(directory):
+    for root, _, files in os.walk(directory):
         for fname in files:
             fpath = os.path.join(root, fname)
             try:
@@ -76,6 +78,8 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=42, help="Unused; reserved for compatibility")
     parser.add_argument("--keep-raw", action="store_true",
                         help="[DEBUG ONLY] Skip secure deletion of raw files. WARNING: raw PII will remain on disk.")
+    parser.add_argument("--export-map", default=DEFAULT_MAP_PATH,
+                        help=f"Path to write token→plaintext JSON map (default: {DEFAULT_MAP_PATH}). Pass empty string to skip.")
     args = parser.parse_args()
 
     if args.keep_raw:
@@ -147,6 +151,7 @@ def main() -> None:
 
     processed = 0
     failed = 0
+    master_token_map: dict[str, str] = {}
 
     for fname in txt_files:
         in_path = os.path.join(args.input_dir, fname)
@@ -162,8 +167,22 @@ def main() -> None:
             with open(out_path, "w", encoding="utf-8") as f:
                 f.write(tokenized)
 
-            token_count = len(pseudonymizer.get_token_map())
-            print(f"  [OK] {fname}  ({token_count} PII tokens replaced)")
+            plaintext_map = pseudonymizer.get_plaintext_map()
+            master_token_map.update(plaintext_map)
+
+            # Store encrypted map in Redis (same format the admin import-rdb expects)
+            encrypted_map = pseudonymizer.get_token_map()
+            if encrypted_map:
+                session_id = os.path.splitext(fname)[0]
+                rc.store_token_map(
+                    token_map=encrypted_map,
+                    session_id=session_id,
+                    filename=fname,
+                    key_id=args.key[:8],
+                    url=redis_url,
+                )
+
+            print(f"  [OK] {fname}  ({len(plaintext_map)} PII tokens replaced)")
             processed += 1
 
         except Exception as exc:
@@ -171,6 +190,29 @@ def main() -> None:
             failed += 1
 
     print(f"\nResults: {processed} succeeded, {failed} failed")
+
+    # --- Flush Redis to dump.rdb ---
+    if master_token_map:
+        try:
+            r = rc.get_client(redis_url)
+            r.bgsave()
+            rdb_dir = r.config_get("dir").get("dir", "/tmp")
+            rdb_file = os.path.join(rdb_dir, "dump.rdb")
+            print(f"\nRedis BGSAVE triggered — dump.rdb will be written to: {rdb_file}")
+            print("  Download it with:  scp root@<pod-ip>:" + rdb_file + " ./dump.rdb")
+            print("  Or on the pod:     cp " + rdb_file + " /workspace/dump.rdb")
+        except Exception as exc:
+            print(f"\nWARNING: could not trigger BGSAVE: {exc}")
+
+    # --- Export token map ---
+    if args.export_map and master_token_map:
+        map_path = args.export_map
+        os.makedirs(os.path.dirname(map_path), exist_ok=True)
+        with open(map_path, "w", encoding="utf-8") as f:
+            json.dump(master_token_map, f, indent=2, ensure_ascii=False)
+        print(f"\nToken map ({len(master_token_map)} entries) saved to: {map_path}")
+        print(f"  AES key used: {args.key!r}")
+        print("  Use this map to decode model outputs: token -> original value")
 
     # --- Secure deletion ---
     if args.keep_raw:

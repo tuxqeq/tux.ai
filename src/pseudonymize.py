@@ -134,3 +134,7 @@ class PIIPseudonymizer:
 
     def get_token_map(self) -> Dict[str, str]:
         return dict(self._token_map)
+
+    def get_plaintext_map(self) -> Dict[str, str]:
+        """Return {token: original_plaintext} — useful for exporting the recovery map."""
+        return {token: value for value, token in self._value_to_token.items()}

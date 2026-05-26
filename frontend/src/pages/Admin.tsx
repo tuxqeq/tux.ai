@@ -6,36 +6,44 @@ const ENTITY_TYPES = [
   "ORG", "API_KEY", "AWS_KEY", "MRN", "BANK", "IP", "USERNAME", "VIN", "*",
 ];
 
+const inputCls =
+  "w-full rounded-xl border border-white/8 bg-surface px-3 py-2.5 text-sm text-white placeholder-white/20 outline-none transition-all focus:border-accent/30 focus:ring-1 focus:ring-accent/10";
+
+const btnCls =
+  "rounded-xl bg-accent px-4 py-2.5 text-sm font-medium text-black/75 transition-all hover:bg-accent-hover disabled:opacity-40";
+
+function SectionLabel({ children }: Readonly<{ children: React.ReactNode }>) {
+  return (
+    <h3 className="mb-3 text-xs font-semibold uppercase tracking-widest text-white/30">
+      {children}
+    </h3>
+  );
+}
+
 export function Admin() {
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [grants, setGrants] = useState<RbacGrant[]>([]);
   const [tab, setTab] = useState<"users" | "datasets" | "rbac">("users");
 
-  // User form
   const [newEmail, setNewEmail] = useState("");
   const [newPass, setNewPass] = useState("");
   const [newRole, setNewRole] = useState("viewer");
 
-  // Dataset form
   const [dsName, setDsName] = useState("");
   const [dsDesc, setDsDesc] = useState("");
 
-  // Key upload form
   const [keyDsId, setKeyDsId] = useState("");
   const [keyHex, setKeyHex] = useState("");
 
-  // RDB import form
   const [rdbDsId, setRdbDsId] = useState("");
   const [rdbFile, setRdbFile] = useState<File | null>(null);
   const [rdbLoading, setRdbLoading] = useState(false);
 
-  // Model upload form
   const [modelDsId, setModelDsId] = useState("");
   const [modelFile, setModelFile] = useState<File | null>(null);
   const [modelLoading, setModelLoading] = useState(false);
 
-  // RBAC grant form
   const [grantUserId, setGrantUserId] = useState("");
   const [grantDsId, setGrantDsId] = useState("");
   const [grantEntity, setGrantEntity] = useState("EMAIL");
@@ -52,7 +60,7 @@ export function Admin() {
   useEffect(() => {
     Promise.all([admin.listUsers(), admin.listDatasets(), admin.listGrants()])
       .then(([u, d, g]) => { setUsers(u); setDatasets(d); setGrants(g); })
-      .catch((e) => flash(e.message, true));
+      .catch((e) => flash((e as Error).message, true));
   }, []);
 
   const createUser = async (e: React.FormEvent) => {
@@ -144,30 +152,48 @@ export function Admin() {
     } catch (e) { flash((e as Error).message, true); }
   };
 
-  const inputCls = "w-full rounded-lg border border-white/10 bg-surface px-3 py-2 text-sm text-white placeholder-white/20 outline-none focus:border-accent focus:ring-1 focus:ring-accent/40";
-  const btnCls = "rounded-lg bg-accent px-3 py-2 text-sm font-medium text-white hover:bg-accent-hover transition-colors";
   const tabCls = (t: string) =>
-    `px-4 py-2 text-sm font-medium transition-colors ${tab === t ? "text-white border-b-2 border-accent" : "text-white/40 hover:text-white"}`;
+    `px-5 py-3 text-sm font-medium transition-colors ${
+      tab === t
+        ? "text-white border-b-2 border-accent"
+        : "text-white/35 hover:text-white/60"
+    }`;
 
   return (
-    <div className="min-h-screen bg-surface p-6">
+    <div className="min-h-screen bg-surface px-4 py-8">
       <div className="mx-auto max-w-4xl">
+        {/* Page header */}
         <div className="mb-6 flex items-center justify-between">
-          <h1 className="text-xl font-semibold text-white">Admin Panel</h1>
-          <a href="/" className="text-sm text-white/50 hover:text-white">← Back to chat</a>
+          <div>
+            <h1 className="text-lg font-semibold">Admin</h1>
+            <p className="mt-0.5 text-xs text-white/30">Manage users, datasets, and access grants</p>
+          </div>
+          <a
+            href="/"
+            className="rounded-lg px-3 py-1.5 text-sm text-white/35 transition-colors hover:bg-white/6 hover:text-white/60"
+          >
+            ← Back to chat
+          </a>
         </div>
 
+        {/* Flash messages */}
         {error && (
-          <div className="mb-4 rounded-lg border border-red-500/30 bg-red-900/20 px-4 py-2 text-sm text-red-400">{error}</div>
+          <div className="mb-4 rounded-xl border border-red-500/20 bg-red-500/8 px-4 py-3 text-sm text-red-300">
+            {error}
+          </div>
         )}
         {success && (
-          <div className="mb-4 rounded-lg border border-green-500/30 bg-green-900/20 px-4 py-2 text-sm text-green-400">{success}</div>
+          <div className="mb-4 rounded-xl border border-emerald-500/20 bg-emerald-500/8 px-4 py-3 text-sm text-emerald-300">
+            {success}
+          </div>
         )}
 
-        <div className="rounded-2xl border border-white/10 bg-surface-raised">
-          <div className="flex border-b border-white/10">
+        {/* Main card */}
+        <div className="rounded-2xl border border-white/8 bg-surface-raised">
+          {/* Tabs */}
+          <div className="flex border-b border-white/8">
             <button className={tabCls("users")} onClick={() => setTab("users")}>Users</button>
-            <button className={tabCls("datasets")} onClick={() => setTab("datasets")}>Datasets & Keys</button>
+            <button className={tabCls("datasets")} onClick={() => setTab("datasets")}>Datasets &amp; Keys</button>
             <button className={tabCls("rbac")} onClick={() => setTab("rbac")}>RBAC Grants</button>
           </div>
 
@@ -175,7 +201,8 @@ export function Admin() {
             {/* ── Users ── */}
             {tab === "users" && (
               <div className="space-y-6">
-                <form onSubmit={createUser} className="grid grid-cols-4 gap-3">
+                <SectionLabel>Add user</SectionLabel>
+                <form onSubmit={createUser} className="grid grid-cols-4 gap-2">
                   <input className={inputCls} placeholder="Email" type="email" required value={newEmail} onChange={(e) => setNewEmail(e.target.value)} />
                   <input className={inputCls} placeholder="Password" type="password" required value={newPass} onChange={(e) => setNewPass(e.target.value)} />
                   <select className={inputCls} value={newRole} onChange={(e) => setNewRole(e.target.value)}>
@@ -183,29 +210,36 @@ export function Admin() {
                     <option value="analyst">Analyst</option>
                     <option value="admin">Admin</option>
                   </select>
-                  <button type="submit" className={btnCls}>Add User</button>
+                  <button type="submit" className={btnCls}>Add user</button>
                 </form>
+
+                <SectionLabel>All users</SectionLabel>
                 <table className="w-full text-sm">
                   <thead>
-                    <tr className="text-left text-white/40 text-xs">
-                      <th className="pb-2">Email</th>
-                      <th className="pb-2">Role</th>
-                      <th className="pb-2">Status</th>
+                    <tr className="border-b border-white/6 text-left text-xs text-white/30">
+                      <th className="pb-2 font-medium">Email</th>
+                      <th className="pb-2 font-medium">Role</th>
+                      <th className="pb-2 font-medium">Status</th>
                       <th className="pb-2" />
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-white/5">
                     {users.map((u) => (
                       <tr key={u.id}>
-                        <td className="py-2 text-white">{u.email}</td>
-                        <td className="py-2 text-white/60">{u.role}</td>
-                        <td className="py-2">
-                          <span className={`text-xs ${u.is_active ? "text-green-400" : "text-red-400"}`}>
+                        <td className="py-3 text-white/80">{u.email}</td>
+                        <td className="py-3 text-white/40">{u.role}</td>
+                        <td className="py-3">
+                          <span className={`text-xs font-medium ${u.is_active ? "text-emerald-400" : "text-red-400"}`}>
                             {u.is_active ? "Active" : "Inactive"}
                           </span>
                         </td>
-                        <td className="py-2 text-right">
-                          <button onClick={() => deleteUser(u.id)} className="text-xs text-red-400/60 hover:text-red-400">Delete</button>
+                        <td className="py-3 text-right">
+                          <button
+                            onClick={() => deleteUser(u.id)}
+                            className="text-xs text-white/20 transition-colors hover:text-red-400"
+                          >
+                            Delete
+                          </button>
                         </td>
                       </tr>
                     ))}
@@ -216,119 +250,114 @@ export function Admin() {
 
             {/* ── Datasets ── */}
             {tab === "datasets" && (
-              <div className="space-y-6">
-                <form onSubmit={createDataset} className="grid grid-cols-3 gap-3">
-                  <input className={inputCls} placeholder="Dataset name" required value={dsName} onChange={(e) => setDsName(e.target.value)} />
-                  <input className={inputCls} placeholder="Description (optional)" value={dsDesc} onChange={(e) => setDsDesc(e.target.value)} />
-                  <button type="submit" className={btnCls}>Create Dataset</button>
-                </form>
+              <div className="space-y-8">
+                <div>
+                  <SectionLabel>Create dataset</SectionLabel>
+                  <form onSubmit={createDataset} className="grid grid-cols-3 gap-2">
+                    <input className={inputCls} placeholder="Dataset name" required value={dsName} onChange={(e) => setDsName(e.target.value)} />
+                    <input className={inputCls} placeholder="Description (optional)" value={dsDesc} onChange={(e) => setDsDesc(e.target.value)} />
+                    <button type="submit" className={btnCls}>Create</button>
+                  </form>
+                </div>
 
-                <div className="mt-4">
-                  <h3 className="mb-3 text-xs font-medium text-white/50 uppercase tracking-wider">Upload AES Key</h3>
-                  <form onSubmit={uploadKey} className="grid grid-cols-3 gap-3">
+                <div>
+                  <SectionLabel>Upload AES Key</SectionLabel>
+                  <form onSubmit={uploadKey} className="grid grid-cols-3 gap-2">
                     <select className={inputCls} value={keyDsId} onChange={(e) => setKeyDsId(e.target.value)} required>
                       <option value="">Select dataset…</option>
                       {datasets.map((d) => (
-                        <option key={d.id} value={d.id}>{d.name} {d.has_key ? "(has key)" : ""}</option>
+                        <option key={d.id} value={d.id}>{d.name}{d.has_key ? " (has key)" : ""}</option>
                       ))}
                     </select>
-                    <input className={inputCls} placeholder="AES key (hex, 32/48/64 chars)" required value={keyHex} onChange={(e) => setKeyHex(e.target.value)} />
-                    <button type="submit" className={btnCls}>Upload Key</button>
+                    <input className={inputCls} placeholder="AES key hex (32/48/64 chars)" required value={keyHex} onChange={(e) => setKeyHex(e.target.value)} />
+                    <button type="submit" className={btnCls}>Upload key</button>
                   </form>
-                  <p className="mt-1 text-xs text-white/30">
-                    Key is encrypted with the server master key before storage. Never logged or transmitted to clients.
+                  <p className="mt-1.5 text-xs text-white/20">
+                    Encrypted with the server master key before storage. Never logged or sent to clients.
                   </p>
                 </div>
 
-                <div className="mt-4">
-                  <h3 className="mb-3 text-xs font-medium text-white/50 uppercase tracking-wider">Import Token Map (dump.rdb)</h3>
-                  <form onSubmit={importRdb} className="grid grid-cols-3 gap-3">
+                <div>
+                  <SectionLabel>Import Token Map (dump.rdb)</SectionLabel>
+                  <form onSubmit={importRdb} className="grid grid-cols-3 gap-2">
                     <select className={inputCls} value={rdbDsId} onChange={(e) => setRdbDsId(e.target.value)} required>
                       <option value="">Select dataset…</option>
                       {datasets.map((d) => (
-                        <option key={d.id} value={d.id}>{d.name} {d.rdb_imported ? "(imported)" : ""}</option>
+                        <option key={d.id} value={d.id}>{d.name}{d.rdb_imported ? " (imported)" : ""}</option>
                       ))}
                     </select>
-                    <input
-                      type="file"
-                      accept=".rdb"
-                      required
-                      className={inputCls}
-                      onChange={(e) => setRdbFile(e.target.files?.[0] ?? null)}
-                    />
+                    <input type="file" accept=".rdb" required className={inputCls} onChange={(e) => setRdbFile(e.target.files?.[0] ?? null)} />
                     <button type="submit" disabled={rdbLoading} className={btnCls}>
                       {rdbLoading ? "Importing…" : "Import RDB"}
                     </button>
                   </form>
-                  <p className="mt-1 text-xs text-white/30">
-                    Tokens are imported from the RDB file into Redis under ds:&#123;id&#125;:tokenmap and used for chat decryption.
+                  <p className="mt-1.5 text-xs text-white/20">
+                    Tokens imported into Redis under ds:&#123;id&#125;:tokenmap for chat decryption.
                   </p>
                 </div>
 
-                <div className="mt-4">
-                  <h3 className="mb-3 text-xs font-medium text-white/50 uppercase tracking-wider">Upload Chat Model (.gguf)</h3>
-                  <form onSubmit={uploadModel} className="grid grid-cols-3 gap-3">
+                <div>
+                  <SectionLabel>Upload Chat Model (.gguf)</SectionLabel>
+                  <form onSubmit={uploadModel} className="grid grid-cols-3 gap-2">
                     <select className={inputCls} value={modelDsId} onChange={(e) => setModelDsId(e.target.value)} required>
                       <option value="">Select dataset…</option>
                       {datasets.map((d) => (
-                        <option key={d.id} value={d.id}>{d.name} {d.model_name ? `(${d.model_name})` : ""}</option>
+                        <option key={d.id} value={d.id}>{d.name}{d.model_name ? ` (${d.model_name})` : ""}</option>
                       ))}
                     </select>
-                    <input
-                      type="file"
-                      accept=".gguf"
-                      required
-                      className={inputCls}
-                      onChange={(e) => setModelFile(e.target.files?.[0] ?? null)}
-                    />
+                    <input type="file" accept=".gguf" required className={inputCls} onChange={(e) => setModelFile(e.target.files?.[0] ?? null)} />
                     <button type="submit" disabled={modelLoading} className={btnCls}>
-                      {modelLoading ? "Registering…" : "Upload Model"}
+                      {modelLoading ? "Registering…" : "Upload model"}
                     </button>
                   </form>
-                  <p className="mt-1 text-xs text-white/30">
-                    GGUF is saved to disk and registered with Ollama. May take several minutes for large models.
+                  <p className="mt-1.5 text-xs text-white/20">
+                    GGUF saved to disk and registered with Ollama. Large models may take several minutes.
                   </p>
                 </div>
 
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="text-left text-white/40 text-xs">
-                      <th className="pb-2">Name</th>
-                      <th className="pb-2">Description</th>
-                      <th className="pb-2">AES Key</th>
-                      <th className="pb-2">RDB</th>
-                      <th className="pb-2">Model</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-white/5">
-                    {datasets.map((d) => (
-                      <tr key={d.id}>
-                        <td className="py-2 text-white">{d.name}</td>
-                        <td className="py-2 text-white/50">{d.description ?? "—"}</td>
-                        <td className="py-2">
-                          <span className={`text-xs ${d.has_key ? "text-green-400" : "text-yellow-400"}`}>
-                            {d.has_key ? "Configured" : "No key"}
-                          </span>
-                        </td>
-                        <td className="py-2">
-                          <span className={`text-xs ${d.rdb_imported ? "text-green-400" : "text-white/30"}`}>
-                            {d.rdb_imported ? "Imported" : "—"}
-                          </span>
-                        </td>
-                        <td className="py-2">
-                          <span className="font-mono text-xs text-white/60">{d.model_name ?? "—"}</span>
-                        </td>
+                <div>
+                  <SectionLabel>All datasets</SectionLabel>
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-white/6 text-left text-xs text-white/30">
+                        <th className="pb-2 font-medium">Name</th>
+                        <th className="pb-2 font-medium">Description</th>
+                        <th className="pb-2 font-medium">AES Key</th>
+                        <th className="pb-2 font-medium">RDB</th>
+                        <th className="pb-2 font-medium">Model</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody className="divide-y divide-white/5">
+                      {datasets.map((d) => (
+                        <tr key={d.id}>
+                          <td className="py-3 text-white/80">{d.name}</td>
+                          <td className="py-3 text-white/35">{d.description ?? "—"}</td>
+                          <td className="py-3">
+                            <span className={`text-xs font-medium ${d.has_key ? "text-emerald-400" : "text-amber-400"}`}>
+                              {d.has_key ? "Configured" : "No key"}
+                            </span>
+                          </td>
+                          <td className="py-3">
+                            <span className={`text-xs ${d.rdb_imported ? "text-emerald-400" : "text-white/20"}`}>
+                              {d.rdb_imported ? "Imported" : "—"}
+                            </span>
+                          </td>
+                          <td className="py-3">
+                            <span className="font-mono text-xs text-white/40">{d.model_name ?? "—"}</span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             )}
 
             {/* ── RBAC ── */}
             {tab === "rbac" && (
               <div className="space-y-6">
-                <form onSubmit={addGrant} className="grid grid-cols-4 gap-3">
+                <SectionLabel>Add grant</SectionLabel>
+                <form onSubmit={addGrant} className="grid grid-cols-4 gap-2">
                   <select className={inputCls} value={grantUserId} onChange={(e) => setGrantUserId(e.target.value)} required>
                     <option value="">Select user…</option>
                     {users.map((u) => <option key={u.id} value={u.id}>{u.email}</option>)}
@@ -340,15 +369,16 @@ export function Admin() {
                   <select className={inputCls} value={grantEntity} onChange={(e) => setGrantEntity(e.target.value)}>
                     {ENTITY_TYPES.map((t) => <option key={t} value={t}>{t === "*" ? "ALL TYPES (*)" : t}</option>)}
                   </select>
-                  <button type="submit" className={btnCls}>Add Grant</button>
+                  <button type="submit" className={btnCls}>Add grant</button>
                 </form>
 
+                <SectionLabel>Active grants</SectionLabel>
                 <table className="w-full text-sm">
                   <thead>
-                    <tr className="text-left text-white/40 text-xs">
-                      <th className="pb-2">User</th>
-                      <th className="pb-2">Dataset</th>
-                      <th className="pb-2">Entity Type</th>
+                    <tr className="border-b border-white/6 text-left text-xs text-white/30">
+                      <th className="pb-2 font-medium">User</th>
+                      <th className="pb-2 font-medium">Dataset</th>
+                      <th className="pb-2 font-medium">Entity type</th>
                       <th className="pb-2" />
                     </tr>
                   </thead>
@@ -358,13 +388,18 @@ export function Admin() {
                       const ds = datasets.find((d) => d.id === g.dataset_id);
                       return (
                         <tr key={g.id}>
-                          <td className="py-2 text-white">{user?.email ?? g.user_id.slice(0, 8)}</td>
-                          <td className="py-2 text-white/60">{ds?.name ?? "—"}</td>
-                          <td className="py-2">
+                          <td className="py-3 text-white/80">{user?.email ?? g.user_id.slice(0, 8)}</td>
+                          <td className="py-3 text-white/40">{ds?.name ?? "—"}</td>
+                          <td className="py-3">
                             <span className="font-mono text-xs text-accent">{g.entity_type}</span>
                           </td>
-                          <td className="py-2 text-right">
-                            <button onClick={() => removeGrant(g.id)} className="text-xs text-red-400/60 hover:text-red-400">Remove</button>
+                          <td className="py-3 text-right">
+                            <button
+                              onClick={() => removeGrant(g.id)}
+                              className="text-xs text-white/20 transition-colors hover:text-red-400"
+                            >
+                              Remove
+                            </button>
                           </td>
                         </tr>
                       );

@@ -5,6 +5,7 @@
 @layer base {
   html {
     @apply bg-surface text-white antialiased;
+    font-feature-settings: "ss01", "ss02", "cv01", "cv02";
   }
 
   * {
@@ -12,14 +13,22 @@
   }
 
   ::-webkit-scrollbar {
-    width: 6px;
+    width: 4px;
   }
 
   ::-webkit-scrollbar-track {
-    @apply bg-surface;
+    @apply bg-transparent;
   }
 
   ::-webkit-scrollbar-thumb {
-    @apply bg-surface-overlay rounded-full;
+    @apply rounded-full bg-white/10;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-white/20;
+  }
+
+  textarea {
+    field-sizing: content;
   }
 }

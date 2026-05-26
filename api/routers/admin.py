@@ -262,6 +262,16 @@ async def remove_grant(
 
 # ── Dataset: import dump.rdb ───────────────────────────────────────────────────
 
+async def _do_rdb_import(dataset_id: uuid.UUID, rdb_bytes: bytes, dataset, db) -> dict:
+    try:
+        count = await import_rdb(dataset_id, rdb_bytes)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"RDB import failed: {exc}")
+    dataset.rdb_imported = True
+    await db.commit()
+    return {"imported_tokens": count}
+
+
 @router.post("/datasets/{dataset_id}/import-rdb", status_code=200)
 async def import_dataset_rdb(
     dataset_id: uuid.UUID,
@@ -273,22 +283,35 @@ async def import_dataset_rdb(
     dataset = result.scalar_one_or_none()
     if not dataset:
         raise HTTPException(status_code=404, detail=_DATASET_NOT_FOUND)
-
     if not file.filename or not file.filename.endswith(".rdb"):
         raise HTTPException(status_code=400, detail="File must be a .rdb file")
-
     rdb_bytes = await file.read()
     if not rdb_bytes:
         raise HTTPException(status_code=400, detail="Uploaded file is empty")
+    return await _do_rdb_import(dataset_id, rdb_bytes, dataset, db)
 
-    try:
-        count = await import_rdb(dataset_id, rdb_bytes)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"RDB import failed: {exc}")
 
-    dataset.rdb_imported = True
-    await db.commit()
-    return {"imported_tokens": count}
+class ImportRdbPathRequest(BaseModel):
+    path: str  # absolute path on the server
+
+
+@router.post("/datasets/{dataset_id}/import-rdb-path", status_code=200)
+async def import_dataset_rdb_path(
+    dataset_id: uuid.UUID,
+    body: ImportRdbPathRequest,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    result = await db.execute(select(Dataset).where(Dataset.id == dataset_id))
+    dataset = result.scalar_one_or_none()
+    if not dataset:
+        raise HTTPException(status_code=404, detail=_DATASET_NOT_FOUND)
+    if not os.path.isfile(body.path):
+        raise HTTPException(status_code=400, detail=f"File not found on server: {body.path}")
+    rdb_bytes = await asyncio.get_event_loop().run_in_executor(None, _read_bytes, body.path)
+    if not rdb_bytes:
+        raise HTTPException(status_code=400, detail="File is empty")
+    return await _do_rdb_import(dataset_id, rdb_bytes, dataset, db)
 
 
 # ── Dataset: upload GGUF model ─────────────────────────────────────────────────
@@ -296,6 +319,11 @@ async def import_dataset_rdb(
 _GGUF_BASE = os.path.join(
     os.path.dirname(__file__), "..", "..", "llm", "uploads"
 )
+
+
+def _read_bytes(path: str) -> bytes:
+    with open(path, "rb") as f:
+        return f.read()
 
 
 def _write_bytes(path: str, data: bytes) -> None:
@@ -321,7 +349,7 @@ async def upload_dataset_model(
         raise HTTPException(status_code=404, detail=_DATASET_NOT_FOUND)
 
     fname = file.filename or ""
-    if not fname.lower().endswith(".gguf"):
+    if not fname.lower().endswith(_GGUF_EXT):
         raise HTTPException(status_code=400, detail="File must be a .gguf file")
 
     # Save to llm/uploads/{dataset_id}/model.gguf
@@ -359,7 +387,63 @@ async def upload_dataset_model(
         raise HTTPException(status_code=500, detail="ollama CLI not found on PATH")
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=f"ollama create failed: {exc}")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"unexpected error: {type(exc).__name__}: {exc}")
 
     dataset.model_name = ollama_model
     await db.commit()
     return {"model_name": ollama_model}
+
+
+async def _register_gguf(gguf_path: str, dataset, db) -> dict:
+    safe_name = dataset.name.lower().replace(" ", "-")[:30]
+    ollama_model = f"tux-ai-{safe_name}"
+
+    modelfile_path = gguf_path.replace(_GGUF_EXT, ".Modelfile")
+    await asyncio.get_event_loop().run_in_executor(
+        None, _write_text, modelfile_path, f"FROM {gguf_path}\n"
+    )
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "ollama", "create", ollama_model, "-f", modelfile_path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=300)
+        if proc.returncode != 0:
+            raise RuntimeError(stderr.decode()[:500])
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=500, detail="ollama create timed out (>5 min)")
+    except FileNotFoundError:
+        raise HTTPException(status_code=500, detail="ollama CLI not found on PATH")
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=f"ollama create failed: {exc}")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"unexpected error: {type(exc).__name__}: {exc}")
+
+    dataset.model_name = ollama_model
+    await db.commit()
+    return {"model_name": ollama_model}
+
+
+class RegisterModelPathRequest(BaseModel):
+    path: str  # absolute path to .gguf on the server
+
+
+@router.post("/datasets/{dataset_id}/register-model-path", status_code=200)
+async def register_model_path(
+    dataset_id: uuid.UUID,
+    body: RegisterModelPathRequest,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    result = await db.execute(select(Dataset).where(Dataset.id == dataset_id))
+    dataset = result.scalar_one_or_none()
+    if not dataset:
+        raise HTTPException(status_code=404, detail=_DATASET_NOT_FOUND)
+    if not os.path.isfile(body.path):
+        raise HTTPException(status_code=400, detail=f"File not found on server: {body.path}")
+    if not body.path.lower().endswith(_GGUF_EXT):
+        raise HTTPException(status_code=400, detail="Path must point to a .gguf file")
+    return await _register_gguf(body.path, dataset, db)

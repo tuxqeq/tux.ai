@@ -5,7 +5,7 @@ interface Props {
   onLogin: () => void;
 }
 
-export function Login({ onLogin }: Props) {
+export function Login({ onLogin }: Readonly<Props>) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -25,64 +25,76 @@ export function Login({ onLogin }: Props) {
     }
   };
 
+  const inputCls =
+    "w-full rounded-xl border border-white/8 bg-white/4 px-4 py-3 text-sm text-white placeholder-white/20 outline-none transition-all focus:border-accent/40 focus:ring-2 focus:ring-accent/8";
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-surface px-4">
-      <div className="w-full max-w-sm">
-        <div className="mb-8 text-center">
-          <h1 className="text-2xl font-semibold tracking-tight text-white">tux.ai</h1>
-          <p className="mt-1 text-sm text-white/50">Sign in to your workspace</p>
+    <div className="flex min-h-screen flex-col items-center justify-center bg-surface px-4">
+      <div className="w-full max-w-[340px]">
+        {/* Logo */}
+        <div className="mb-10 flex flex-col items-center gap-4">
+          <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-accent/10 ring-1 ring-accent/20">
+            <svg
+              className="h-5 w-5 text-accent"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={1.5}
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z"
+              />
+            </svg>
+          </div>
+          <div className="text-center">
+            <h1 className="text-xl font-semibold tracking-tight">
+              tux<span className="text-accent">.ai</span>
+            </h1>
+            <p className="mt-1.5 text-sm text-white/35">Sign in to continue</p>
+          </div>
         </div>
 
-        <form
-          onSubmit={handleSubmit}
-          className="rounded-2xl border border-white/10 bg-surface-raised p-6 shadow-2xl"
-        >
+        <form onSubmit={handleSubmit} className="space-y-2.5">
           {error && (
-            <div className="mb-4 rounded-lg border border-red-500/30 bg-red-900/20 px-3 py-2 text-sm text-red-400">
+            <div className="rounded-xl border border-red-500/20 bg-red-500/8 px-4 py-3 text-sm text-red-300">
               {error}
             </div>
           )}
 
-          <div className="space-y-4">
-            <div>
-              <label className="mb-1.5 block text-xs font-medium text-white/60">
-                Email
-              </label>
-              <input
-                type="email"
-                autoComplete="email"
-                required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="w-full rounded-lg border border-white/10 bg-surface px-3 py-2 text-sm text-white placeholder-white/20 outline-none focus:border-accent focus:ring-1 focus:ring-accent/50 transition-colors"
-                placeholder="you@company.com"
-              />
-            </div>
+          <input
+            type="email"
+            autoComplete="email"
+            required
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            className={inputCls}
+            placeholder="Email"
+          />
 
-            <div>
-              <label className="mb-1.5 block text-xs font-medium text-white/60">
-                Password
-              </label>
-              <input
-                type="password"
-                autoComplete="current-password"
-                required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="w-full rounded-lg border border-white/10 bg-surface px-3 py-2 text-sm text-white placeholder-white/20 outline-none focus:border-accent focus:ring-1 focus:ring-accent/50 transition-colors"
-                placeholder="••••••••"
-              />
-            </div>
-          </div>
+          <input
+            type="password"
+            autoComplete="current-password"
+            required
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            className={inputCls}
+            placeholder="Password"
+          />
 
           <button
             type="submit"
             disabled={loading}
-            className="mt-6 w-full rounded-lg bg-accent py-2.5 text-sm font-medium text-white hover:bg-accent-hover disabled:opacity-50 transition-colors"
+            className="mt-1 w-full rounded-xl bg-accent py-3 text-sm font-medium text-black/75 transition-all hover:bg-accent-hover disabled:opacity-40"
           >
-            {loading ? "Signing in…" : "Sign in"}
+            {loading ? "Signing in…" : "Continue"}
           </button>
         </form>
+
+        <p className="mt-10 text-center text-xs text-white/18">
+          PII is detected and encrypted before leaving your device.
+        </p>
       </div>
     </div>
   );

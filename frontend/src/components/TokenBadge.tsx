@@ -1,39 +1,33 @@
-/**
- * Renders a [LABEL_hexid] token as a styled pill.
- * visible=true means the plaintext was already substituted (server decrypted it)
- * and the surrounding text shows it normally — this badge is only shown for
- * tokens that remain unreplaced (visible=false).
- */
 interface Props {
   label: string;
   hexid: string;
 }
 
 const LABEL_COLORS: Record<string, string> = {
-  PERSON: "bg-blue-900/50 text-blue-300 border-blue-700",
-  EMAIL: "bg-violet-900/50 text-violet-300 border-violet-700",
-  PHONE: "bg-cyan-900/50 text-cyan-300 border-cyan-700",
-  SSN: "bg-red-900/50 text-red-300 border-red-700",
-  CREDIT_CARD: "bg-red-900/50 text-red-300 border-red-700",
-  CVV: "bg-red-900/50 text-red-300 border-red-700",
-  DOB: "bg-orange-900/50 text-orange-300 border-orange-700",
-  LOCATION: "bg-emerald-900/50 text-emerald-300 border-emerald-700",
-  ORG: "bg-teal-900/50 text-teal-300 border-teal-700",
-  API_KEY: "bg-yellow-900/50 text-yellow-300 border-yellow-700",
-  AWS_KEY: "bg-yellow-900/50 text-yellow-300 border-yellow-700",
-  IP: "bg-slate-700/50 text-slate-300 border-slate-600",
+  PERSON:      "bg-sky-500/12 text-sky-300 border-sky-500/25",
+  EMAIL:       "bg-violet-500/12 text-violet-300 border-violet-500/25",
+  PHONE:       "bg-cyan-500/12 text-cyan-300 border-cyan-500/25",
+  SSN:         "bg-red-500/12 text-red-300 border-red-500/25",
+  CREDIT_CARD: "bg-red-500/12 text-red-300 border-red-500/25",
+  CVV:         "bg-red-500/12 text-red-300 border-red-500/25",
+  DOB:         "bg-orange-500/12 text-orange-300 border-orange-500/25",
+  LOCATION:    "bg-emerald-500/12 text-emerald-300 border-emerald-500/25",
+  ORG:         "bg-teal-500/12 text-teal-300 border-teal-500/25",
+  API_KEY:     "bg-yellow-500/12 text-yellow-300 border-yellow-500/25",
+  AWS_KEY:     "bg-yellow-500/12 text-yellow-300 border-yellow-500/25",
+  IP:          "bg-zinc-500/12 text-zinc-300 border-zinc-500/25",
 };
 
-const DEFAULT_COLOR = "bg-zinc-800/60 text-zinc-400 border-zinc-600";
+const DEFAULT_COLOR = "bg-white/6 text-white/45 border-white/12";
 
-export function TokenBadge({ label, hexid }: Props) {
+export function TokenBadge({ label, hexid }: Readonly<Props>) {
   const colorClass = LABEL_COLORS[label] ?? DEFAULT_COLOR;
   return (
     <span
       title={`Redacted: ${label} (${hexid})`}
-      className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 font-mono text-xs leading-none ${colorClass}`}
+      className={`inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 font-mono text-xs leading-none ${colorClass}`}
     >
-      <span className="opacity-60 select-none">⊘</span>
+      <span className="select-none opacity-40">⊘</span>
       <span>{label}</span>
     </span>
   );

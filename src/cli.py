@@ -373,9 +373,9 @@ def pick_output_file() -> Path | None:
         print_error(f"output/ directory not found at {OUTPUT_DIR}")
         return None
 
-    files = sorted(f for f in OUTPUT_DIR.iterdir() if f.is_file() and "_tokenized" in f.name)
+    files = sorted(f for f in OUTPUT_DIR.iterdir() if f.is_file())
     if not files:
-        print_error("No tokenized files found in output/")
+        print_error("No files found in output/")
         return None
 
     choices = [f.name for f in files] + [BACK]

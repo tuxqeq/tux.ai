@@ -113,3 +113,5 @@ frontend/dist/
 
 # Alembic
 alembic/versions/*.pyc
+dump.rdb
+dump.rdb

@@ -19,6 +19,8 @@ async def stream_chat(
 
     Each yielded value is a text delta string (may be empty for the final done message).
     Raises httpx.HTTPError on connection failure.
+
+    Strips Qwen3 <think>...</think> reasoning blocks before yielding.
     """
     settings = get_settings()
     url = f"{settings.OLLAMA_URL}/api/chat"
@@ -31,6 +33,10 @@ async def stream_chat(
     async with httpx.AsyncClient(timeout=120.0) as client:
         async with client.stream("POST", url, json=payload) as response:
             response.raise_for_status()
+
+            in_think = False
+            think_buf = ""
+
             async for line in response.aiter_lines():
                 if not line.strip():
                     continue
@@ -41,7 +47,29 @@ async def stream_chat(
 
                 content = data.get("message", {}).get("content", "")
                 if content:
-                    yield content
+                    # Buffer and strip <think>...</think> blocks (Qwen3 reasoning)
+                    think_buf += content
+                    while True:
+                        if in_think:
+                            end = think_buf.find("</think>")
+                            if end == -1:
+                                think_buf = ""  # still inside think block, discard
+                                break
+                            think_buf = think_buf[end + len("</think>"):]
+                            in_think = False
+                        else:
+                            start = think_buf.find("<think>")
+                            if start == -1:
+                                if think_buf:
+                                    yield think_buf
+                                think_buf = ""
+                                break
+                            if start > 0:
+                                yield think_buf[:start]
+                            think_buf = think_buf[start + len("<think>"):]
+                            in_think = True
 
                 if data.get("done"):
+                    if think_buf and not in_think:
+                        yield think_buf
                     break

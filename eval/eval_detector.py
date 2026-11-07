@@ -1,11 +1,14 @@
 """
 eval_detector.py — Phase 1: precision / recall / F1 of the PII detector on a labelled set.
 
-Modes (each text is run through Presidio and the AI model once; hybrid = HybridDetector.combine,
-the same rule that production detect() uses):
-  presidio  rules only (Presidio built-ins + custom recognizers)
-  ai        DistilBERT token classifier only, above --threshold
-  hybrid    Presidio spans + AI spans where Presidio found nothing
+Modes (each text is run through Presidio and each AI granularity once):
+  presidio           rules only (Presidio built-ins + custom recognizers)
+  ai                 DistilBERT, HF pipeline over all sub-tokens (old), above --threshold
+  hybrid             old rule (HybridDetector.combine): AI spans only where Presidio found nothing
+  ai_word            DistilBERT, one label per whitespace word from its first sub-token (as trained)
+  hybrid_union       union of Presidio + ai spans, label from the longest span, tie: AI
+  hybrid_word        old rule with ai_word
+  hybrid_word_union  union rule with ai_word  == production HybridDetector.detect() since 2026-11-07
 
 Input: JSON list of {"text": str, "entities": [[start, end, LABEL], ...]} (generate_data.py format).
 Gold labels: PER ORG LOC EMAIL PHONE SSN CREDIT_CARD DOB LICENSE PASSPORT IP_ADDRESS MRN
@@ -38,33 +41,13 @@ from typing import Dict, List, Tuple
 _ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 sys.path.insert(0, os.path.join(_ROOT, "src"))
 
-MODES = ("presidio", "ai", "hybrid")
+MODES = ("presidio", "ai", "hybrid", "ai_word", "hybrid_union", "hybrid_word", "hybrid_word_union")
 
-PRESIDIO_TO_GOLD: Dict[str, str] = {
-    "PERSON": "PER",
-    "LOCATION": "LOC",
-    "EMAIL_ADDRESS": "EMAIL",
-    "PHONE_NUMBER": "PHONE",
-    "US_SSN": "SSN",
-    "CREDIT_CARD": "CREDIT_CARD",
-    "DATE_OF_BIRTH": "DOB",
-    "US_DRIVER_LICENSE": "LICENSE",
-    "DRIVERS_LICENSE": "LICENSE",
-    "US_PASSPORT": "PASSPORT",
-    "PASSPORT_NUMBER": "PASSPORT",
-    "IP_ADDRESS": "IP_ADDRESS",
-    "MEDICAL_RECORD_NUMBER": "MRN",
-    "US_BANK_NUMBER": "BANK_ACCOUNT",
-    "BANK_ACCOUNT": "BANK_ACCOUNT",
-    "USERNAME": "USERNAME",
-    "VIN": "VIN",
-    "API_KEY": "API_KEY",
-    "SERVICE_API_KEY": "API_KEY",
-    "AWS_KEY": "API_KEY",
-    "MAC_ADDRESS": "MAC",
-    "EMPLOYEE_ID": "EMP_ID",
-    "INSURANCE_NUMBER": "INSURANCE",
-}
+from utils import PRESIDIO_TO_AI_LABEL  # noqa: E402
+
+# Eval also scores AWS keys as API_KEY (the gold set has no AWS_KEY type).
+PRESIDIO_TO_GOLD: Dict[str, str] = {**PRESIDIO_TO_AI_LABEL, "AWS_KEY": "API_KEY"}
+
 
 Span = Tuple[int, int, str]  # start, end, label
 
@@ -224,6 +207,8 @@ def main() -> None:
     ap.add_argument("--modes", default=",".join(MODES))
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--out-dir", default="eval/results")
+    ap.add_argument("--save-preds", action="store_true",
+                    help="also write every text's gold and raw predictions to <stem>_preds.jsonl")
     args = ap.parse_args()
 
     modes = [m.strip() for m in args.modes.split(",") if m.strip()]
@@ -234,29 +219,59 @@ def main() -> None:
     if args.limit:
         data = data[: args.limit]
 
-    from tqdm import tqdm
-    from hybrid_detect import HybridDetector
+    try:
+        from tqdm import tqdm
+        from hybrid_detect import HybridDetector
+    except ModuleNotFoundError as exc:
+        sys.exit(f"{exc}. Run with the project venv: source .venv/bin/activate (or .venv/bin/python ...)")
 
-    need_ai = any(m in ("ai", "hybrid") for m in modes)
-    det = HybridDetector(ai_model_path=args.model_path, use_ai=need_ai, ai_threshold=args.threshold)
+    need_pres = any(m == "presidio" or m.startswith("hybrid") for m in modes)
+    need_sub = any(m in ("ai", "hybrid", "hybrid_union") for m in modes)
+    need_word = any(m in ("ai_word", "hybrid_word", "hybrid_word_union") for m in modes)
+    det = HybridDetector(ai_model_path=args.model_path, use_ai=need_sub or need_word,
+                         ai_threshold=args.threshold)
+
+    os.makedirs(args.out_dir, exist_ok=True)
+    stamp = dt.datetime.now().strftime("%Y%m%d_%H%M")
+    stem = f"detector_{os.path.splitext(os.path.basename(args.data))[0]}_{stamp}"
+    preds_f = open(os.path.join(args.out_dir, stem + "_preds.jsonl"), "w") if args.save_preds else None
+    raw = lambda rs: [[r["start"], r["end"], r["label"], r["source"], float(r["score"])] for r in rs]
 
     aggs = {m: Aggregate() for m in modes}
     for item in tqdm(data, desc="Evaluating"):
         text = item["text"]
         gold = [(s, e, l) for s, e, l in item["entities"]]
-        pres = det.detect_presidio(text) if any(m in ("presidio", "hybrid") for m in modes) else []
-        ai = det.detect_ai(text) if need_ai else []
-        by_mode = {"presidio": pres, "ai": ai, "hybrid": HybridDetector.combine(pres, ai)}
+        pres = det.detect_presidio(text) if need_pres else []
+        ai = det.detect_ai(text) if need_sub else []
+        aiw = det.detect_ai(text, granularity="word") if need_word else []
+        by_mode = {
+            "presidio": pres,
+            "ai": ai,
+            "hybrid": HybridDetector.combine(pres, ai),
+            "ai_word": aiw,
+            "hybrid_union": HybridDetector.combine_union(pres, ai, text),
+            "hybrid_word": HybridDetector.combine(pres, aiw),
+            "hybrid_word_union": HybridDetector.combine_union(pres, aiw, text),
+        }
         for m in modes:
             pred = [(r["start"], r["end"], to_gold_label(r["label"], r["source"])) for r in by_mode[m]]
             aggs[m].add(score_doc(text, gold, pred), len(pred))
+        if preds_f:
+            preds_f.write(json.dumps({"text": text, "gold": item["entities"], "presidio": raw(pres),
+                                      "ai": raw(ai), "ai_word": raw(aiw)}, ensure_ascii=False) + "\n")
+    if preds_f:
+        preds_f.close()
 
     for m in modes:
         print_report(m, aggs[m])
 
-    os.makedirs(args.out_dir, exist_ok=True)
-    stamp = dt.datetime.now().strftime("%Y%m%d_%H%M")
-    stem = f"detector_{os.path.splitext(os.path.basename(args.data))[0]}_{stamp}"
+    print(f"\n{'mode':<19}{'P':>7}{'R':>7}{'F1':>7}{'F1ex':>7}{'untypR':>8}{'full':>7}{'leaked':>8}{'spur':>6}")
+    for m in modes:
+        x = aggs[m].summary()
+        print(f"{m:<19}{_fmt(x['micro_precision']):>7}{_fmt(x['micro_recall']):>7}{_fmt(x['micro_f1']):>7}"
+              f"{_fmt(x['micro_f1_exact']):>7}{_fmt(x['entity_recall_untyped']):>8}"
+              f"{_fmt(x['full_coverage_untyped']):>7}{_fmt(x['leaked_char_rate']):>8}{x['spurious_spans']:>6}")
+
     meta = {"data": args.data, "n_texts": len(data), "model_path": args.model_path,
             "threshold": args.threshold, "modes": modes, "created": stamp,
             "presidio_to_gold": PRESIDIO_TO_GOLD}
@@ -265,13 +280,15 @@ def main() -> None:
                                              "fp_examples": aggs[m].fp_examples} for m in modes}}
     with open(os.path.join(args.out_dir, stem + ".json"), "w") as f:
         json.dump(result, f, indent=2, ensure_ascii=False)
+    fields = ["mode", "label", "support", "tp", "fp", "fn", "precision", "recall", "f1", "f1_exact",
+              "entity_recall_untyped", "full_coverage_untyped"]
     with open(os.path.join(args.out_dir, stem + ".csv"), "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=["mode"] + list(aggs[modes[0]].rows()[0].keys()) if aggs[modes[0]].rows() else ["mode"])
+        w = csv.DictWriter(f, fieldnames=fields)
         w.writeheader()
         for m in modes:
             for r in aggs[m].rows():
                 w.writerow({"mode": m, **r})
-    print(f"\nSaved: {args.out_dir}/{stem}.json and .csv")
+    print(f"\nSaved: {args.out_dir}/{stem}.json and .csv" + (" and _preds.jsonl" if preds_f else ""))
 
 
 if __name__ == "__main__":

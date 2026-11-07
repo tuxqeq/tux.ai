@@ -9,6 +9,34 @@ except ImportError:
     from typing_extensions import TypedDict
 
 
+# Presidio label -> the AI model label for the same kind of PII. Presidio labels that are NOT
+# here (AWS_KEY, IBAN_CODE, TAX_ID, CVV, ...) are more specific than anything the model predicts.
+PRESIDIO_TO_AI_LABEL: Dict[str, str] = {
+    "PERSON": "PER",
+    "LOCATION": "LOC",
+    "EMAIL_ADDRESS": "EMAIL",
+    "PHONE_NUMBER": "PHONE",
+    "US_SSN": "SSN",
+    "CREDIT_CARD": "CREDIT_CARD",
+    "DATE_OF_BIRTH": "DOB",
+    "US_DRIVER_LICENSE": "LICENSE",
+    "DRIVERS_LICENSE": "LICENSE",
+    "US_PASSPORT": "PASSPORT",
+    "PASSPORT_NUMBER": "PASSPORT",
+    "IP_ADDRESS": "IP_ADDRESS",
+    "MEDICAL_RECORD_NUMBER": "MRN",
+    "US_BANK_NUMBER": "BANK_ACCOUNT",
+    "BANK_ACCOUNT": "BANK_ACCOUNT",
+    "USERNAME": "USERNAME",
+    "VIN": "VIN",
+    "API_KEY": "API_KEY",
+    "SERVICE_API_KEY": "API_KEY",
+    "MAC_ADDRESS": "MAC",
+    "EMPLOYEE_ID": "EMP_ID",
+    "INSURANCE_NUMBER": "INSURANCE",
+}
+
+
 class DetectionResult(TypedDict):
     start: int
     end: int

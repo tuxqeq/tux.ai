@@ -33,6 +33,7 @@ LABEL_NORM: Dict[str, str] = {
     "PER":                  "PERSON",
     "ORG":                  "ORG",
     "LOC":                  "LOCATION",
+    "LICENSE":              "DL",
     "MISC":                 "MISC",
     # Generic fallback used by generate_data.py
     "PII":                  "PII",

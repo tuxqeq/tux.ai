@@ -117,3 +117,8 @@ frontend/dist/
 alembic/versions/*.pyc
 dump.rdb
 dump.rdb
+
+# Eval outputs with raw texts / error examples: they contain synthetic fake keys (sk_live_...)
+# that trip GitHub push protection. The per-label CSV summaries are committed.
+eval/results/*.json
+eval/results/*_preds.jsonl

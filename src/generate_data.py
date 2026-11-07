@@ -5,6 +5,7 @@ import re
 from faker import Faker
 from tqdm import tqdm
 import os
+from collections import defaultdict
 
 fake = Faker()
 
@@ -48,7 +49,44 @@ def make_value(key: str) -> str:
     return generators[key]() if key in generators else key
 
 
-def generate_data(count, output_file):
+TEST_FRACTION = 0.2
+
+
+def _template_keys(template: str) -> tuple:
+    return tuple(sorted(set(re.findall(r"\{(\w+)\}", template))))
+
+
+def select_split(templates, split):
+    """Deterministic template-level split for held-out evaluation.
+
+    Templates are grouped by their set of placeholder keys. In each group with
+    2+ templates, the last ~20% (at least one) go to the test split, so the test
+    set uses sentence patterns the model never saw in training. Groups with one
+    template stay in train, so every entity type is still trained on.
+    """
+    if split == "all":
+        return templates
+    groups = defaultdict(list)
+    for item in templates:
+        groups[_template_keys(item[0])].append(item)
+    train, test = [], []
+    for key in sorted(groups):
+        group = groups[key]
+        if len(group) < 2:
+            train.extend(group)
+            continue
+        n_test = max(1, round(len(group) * TEST_FRACTION))
+        train.extend(group[:-n_test])
+        test.extend(group[-n_test:])
+    trained = {k for t, _ in train for k in _template_keys(t)}
+    missing = {k for t, _ in test for k in _template_keys(t)} - trained
+    if missing:
+        raise ValueError(f"Test templates use keys absent from train: {sorted(missing)}")
+    print(f"Template split: {len(train)} train, {len(test)} test (of {len(templates)})")
+    return train if split == "train" else test
+
+
+def generate_data(count, output_file, split="all", seed=None):
     data = []
 
     templates = [
@@ -352,6 +390,11 @@ def generate_data(count, output_file):
         ("Cybersecurity measures.", []),
     ]
 
+    if seed is not None:
+        random.seed(seed)
+        Faker.seed(seed)
+    templates = select_split(templates, split)
+
     for _ in tqdm(range(count), desc="Generating data"):
         template, _ = random.choice(templates)
         parts = re.split(r'(\{\w+\})', template)
@@ -381,7 +424,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--count", type=int, default=100)
     parser.add_argument("--output", type=str, default="data/train_data.json")
+    parser.add_argument("--split", choices=["all", "train", "test"], default="all",
+                        help="Template split: 'train'/'test' hold out ~20%% of templates for evaluation")
+    parser.add_argument("--seed", type=int, default=None, help="Seed for random and Faker")
     args = parser.parse_args()
     
     os.makedirs(os.path.dirname(args.output), exist_ok=True)
-    generate_data(args.count, args.output)
+    generate_data(args.count, args.output, args.split, args.seed)

@@ -108,7 +108,7 @@ else
 fi
 
 # ── PII model ──────────────────────────────────────────────────────────────────
-for MODEL_DIR in models/pii_model_v2 models/pii_model_advanced models/pii_model_large models/pii_model; do
+for MODEL_DIR in models/pii_model_v3 models/pii_model_v2 models/pii_model; do
     if [ -f "$ROOT/$MODEL_DIR/model.safetensors" ]; then
         echo "  ✓ PII model: $MODEL_DIR"
         export MODEL_PATH="$MODEL_DIR"

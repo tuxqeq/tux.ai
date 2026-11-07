@@ -54,7 +54,7 @@ def _trim_keyword_prefix(text: str, start: int, end: int, label: str):
 
 
 class HybridDetector:
-    def __init__(self, ai_model_path: str = "models/pii_model_v2",
+    def __init__(self, ai_model_path: str = "models/pii_model_v3",
                  use_ai: bool = True, ai_threshold: float = 0.95):
         if not (0.0 <= ai_threshold <= 1.0):
             raise ValueError(f"ai_threshold must be between 0 and 1, got {ai_threshold}")
@@ -71,6 +71,12 @@ class HybridDetector:
         if self.use_ai:
             if not os.path.exists(ai_model_path):
                 raise FileNotFoundError(f"AI model not found: {ai_model_path}")
+            weights = ("model.safetensors", "pytorch_model.bin")
+            if not any(os.path.exists(os.path.join(ai_model_path, w)) for w in weights):
+                raise FileNotFoundError(
+                    f"No model weights in {ai_model_path} (expected model.safetensors). "
+                    "Train them with: bash scripts/retrain_detector.sh, or run with --no-ai."
+                )
             from transformers import pipeline
             print(f"Loading AI model from {ai_model_path}...")
             self.ai_classifier = pipeline(
@@ -86,10 +92,8 @@ class HybridDetector:
 
         print("Hybrid detector ready!")
 
-    def detect(self, text: str) -> List[DetectionResult]:
-        results: List[DetectionResult] = []
-
-        # --- Step 1: Presidio rule-based detection ---
+    def detect_presidio(self, text: str) -> List[DetectionResult]:
+        """Step 1: Presidio rule-based detection, overlapping spans deduplicated."""
         presidio_results = self.analyzer.analyze(
             text=text,
             entities=PRESIDIO_ENTITIES,
@@ -113,7 +117,7 @@ class HybridDetector:
                             deduped[i] = res
                         break
 
-        presidio_spans: set = set()
+        results: List[DetectionResult] = []
         for res in deduped:
             start, end = _trim_keyword_prefix(text, res.start, res.end, res.entity_type)
             results.append(DetectionResult(
@@ -123,38 +127,55 @@ class HybridDetector:
                 source="PRESIDIO",
                 score=res.score,
             ))
-            presidio_spans.update(range(start, end))
+        return results
 
-        # --- Step 2: AI detection for spans Presidio missed ---
-        if self.use_ai and self.ai_classifier:
-            raw_ai = self.ai_classifier(text)
+    def detect_ai(self, text: str) -> List[DetectionResult]:
+        """Step 2: AI token classification above ai_threshold, without the Presidio filter."""
+        if not (self.use_ai and self.ai_classifier):
+            return []
+        raw_ai = self.ai_classifier(text)
 
-            # Merge consecutive sub-token fragments of the same entity
-            merged_ai = []
-            for ai_res in raw_ai:
-                if (merged_ai
-                        and merged_ai[-1]["entity_group"] == ai_res["entity_group"]
-                        and ai_res["start"] <= merged_ai[-1]["end"] + 1):
-                    merged_ai[-1]["end"] = ai_res["end"]
-                    merged_ai[-1]["score"] = max(merged_ai[-1]["score"], ai_res["score"])
-                else:
-                    merged_ai.append(dict(ai_res))
+        # Merge consecutive sub-token fragments of the same entity
+        merged_ai = []
+        for ai_res in raw_ai:
+            if (merged_ai
+                    and merged_ai[-1]["entity_group"] == ai_res["entity_group"]
+                    and ai_res["start"] <= merged_ai[-1]["end"] + 1):
+                merged_ai[-1]["end"] = ai_res["end"]
+                merged_ai[-1]["score"] = max(merged_ai[-1]["score"], ai_res["score"])
+            else:
+                merged_ai.append(dict(ai_res))
 
-            for ai_res in merged_ai:
-                ai_start, ai_end, ai_score = ai_res["start"], ai_res["end"], ai_res["score"]
-                if ai_score < self.ai_threshold:
-                    continue
-                if not any(i in presidio_spans for i in range(ai_start, ai_end)):
-                    results.append(DetectionResult(
-                        start=ai_start, end=ai_end,
-                        label=ai_res["entity_group"],
-                        text=text[ai_start:ai_end],
-                        source="AI_MODEL",
-                        score=ai_score,
-                    ))
+        results: List[DetectionResult] = []
+        for ai_res in merged_ai:
+            ai_start, ai_end, ai_score = ai_res["start"], ai_res["end"], ai_res["score"]
+            if ai_score < self.ai_threshold:
+                continue
+            results.append(DetectionResult(
+                start=ai_start, end=ai_end,
+                label=ai_res["entity_group"],
+                text=text[ai_start:ai_end],
+                source="AI_MODEL",
+                score=ai_score,
+            ))
+        return results
 
+    @staticmethod
+    def combine(presidio_results: List[DetectionResult],
+                ai_results: List[DetectionResult]) -> List[DetectionResult]:
+        """Hybrid rule: keep every Presidio span; add an AI span only where Presidio found nothing."""
+        presidio_spans: set = set()
+        for r in presidio_results:
+            presidio_spans.update(range(r["start"], r["end"]))
+        results = list(presidio_results)
+        for r in ai_results:
+            if not any(i in presidio_spans for i in range(r["start"], r["end"])):
+                results.append(r)
         results.sort(key=lambda x: x["start"])
         return results
+
+    def detect(self, text: str) -> List[DetectionResult]:
+        return self.combine(self.detect_presidio(text), self.detect_ai(text))
 
     def encrypt_text(self, text: str, results: List[DetectionResult], aes_key: bytes) -> str:
         """Encrypt detected PII spans in text using AES (reversible)."""
@@ -196,7 +217,7 @@ def main() -> None:
     group.add_argument("--text", type=str, help="Text to analyze")
     group.add_argument("--file", type=str, help="File to analyze")
     parser.add_argument("--output", type=str, help="Output file for encrypted text")
-    parser.add_argument("--model-path", type=str, default="models/pii_model_v2",
+    parser.add_argument("--model-path", type=str, default="models/pii_model_v3",
                         help="Path to AI model")
     parser.add_argument("--encrypt", action="store_true", help="Encrypt detected PII")
     parser.add_argument("--key", type=str, default="16ByteSecureKey!",

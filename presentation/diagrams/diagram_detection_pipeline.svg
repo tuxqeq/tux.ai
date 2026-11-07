@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 520" font-family="Georgia, 'Times New Roman', serif">
+  <rect width="1200" height="520" fill="#f1f1ef"/>
+
+  <!-- Input -->
+  <g>
+    <rect x="40" y="220" width="190" height="80" rx="8" fill="none" stroke="#111" stroke-width="1.6"/>
+    <text x="135" y="255" text-anchor="middle" font-size="18" fill="#111">Raw text</text>
+    <text x="135" y="280" text-anchor="middle" font-size="13" fill="#444" font-family="Helvetica, Arial, sans-serif">"Call John at 555-0142"</text>
+  </g>
+
+  <!-- Arrow to split -->
+  <line x1="230" y1="260" x2="320" y2="260" stroke="#111" stroke-width="1.6"/>
+  <polygon points="320,260 310,254 310,266" fill="#111"/>
+
+  <!-- Layer 1: Presidio -->
+  <g>
+    <rect x="350" y="80" width="260" height="140" rx="8" fill="#fff" stroke="#111" stroke-width="1.6"/>
+    <text x="480" y="110" text-anchor="middle" font-size="14" fill="#666" font-family="Helvetica, Arial, sans-serif">LAYER 1</text>
+    <text x="480" y="140" text-anchor="middle" font-size="22" font-weight="bold" fill="#111">Presidio</text>
+    <text x="480" y="165" text-anchor="middle" font-size="13" fill="#444" font-family="Helvetica, Arial, sans-serif">Rule-based · Regex</text>
+    <text x="480" y="190" text-anchor="middle" font-size="12" fill="#666" font-family="Helvetica, Arial, sans-serif">17 built-in + 23 custom</text>
+    <text x="480" y="208" text-anchor="middle" font-size="12" fill="#666" font-family="Helvetica, Arial, sans-serif">recognizers</text>
+  </g>
+
+  <!-- Layer 2: DistilBERT -->
+  <g>
+    <rect x="350" y="300" width="260" height="140" rx="8" fill="#fff" stroke="#111" stroke-width="1.6"/>
+    <text x="480" y="330" text-anchor="middle" font-size="14" fill="#666" font-family="Helvetica, Arial, sans-serif">LAYER 2</text>
+    <text x="480" y="360" text-anchor="middle" font-size="22" font-weight="bold" fill="#111">DistilBERT</text>
+    <text x="480" y="385" text-anchor="middle" font-size="13" fill="#444" font-family="Helvetica, Arial, sans-serif">Fine-tuned · Contextual</text>
+    <text x="480" y="410" text-anchor="middle" font-size="12" fill="#666" font-family="Helvetica, Arial, sans-serif">100K synthetic samples</text>
+    <text x="480" y="428" text-anchor="middle" font-size="12" fill="#666" font-family="Helvetica, Arial, sans-serif">19 BIO entity labels</text>
+  </g>
+
+  <!-- Split lines -->
+  <line x1="320" y1="260" x2="320" y2="150" stroke="#111" stroke-width="1.6"/>
+  <line x1="320" y1="150" x2="350" y2="150" stroke="#111" stroke-width="1.6"/>
+  <polygon points="350,150 340,144 340,156" fill="#111"/>
+  <line x1="320" y1="260" x2="320" y2="370" stroke="#111" stroke-width="1.6"/>
+  <line x1="320" y1="370" x2="350" y2="370" stroke="#111" stroke-width="1.6"/>
+  <polygon points="350,370 340,364 340,376" fill="#111"/>
+
+  <!-- Merge octagon -->
+  <g>
+    <polygon points="730,220 850,220 890,260 890,300 850,340 730,340 690,300 690,260"
+             fill="#fff" stroke="#111" stroke-width="1.6"/>
+    <text x="790" y="270" text-anchor="middle" font-size="18" fill="#111">Merge</text>
+    <text x="790" y="295" text-anchor="middle" font-size="12" fill="#666" font-family="Helvetica, Arial, sans-serif">deduplicate</text>
+    <text x="790" y="312" text-anchor="middle" font-size="12" fill="#666" font-family="Helvetica, Arial, sans-serif">overlapping spans</text>
+  </g>
+
+  <!-- Arrows from layers to merge -->
+  <line x1="610" y1="150" x2="690" y2="240" stroke="#111" stroke-width="1.6"/>
+  <polygon points="690,240 680,236 685,228" fill="#111"/>
+  <line x1="610" y1="370" x2="690" y2="320" stroke="#111" stroke-width="1.6"/>
+  <polygon points="690,320 685,332 680,324" fill="#111"/>
+
+  <!-- Arrow to output -->
+  <line x1="890" y1="280" x2="970" y2="280" stroke="#111" stroke-width="1.6"/>
+  <polygon points="970,280 960,274 960,286" fill="#111"/>
+
+  <!-- Output -->
+  <g>
+    <rect x="970" y="220" width="190" height="120" rx="8" fill="none" stroke="#111" stroke-width="1.6"/>
+    <text x="1065" y="250" text-anchor="middle" font-size="16" fill="#111">Detected spans</text>
+    <text x="1065" y="280" text-anchor="middle" font-size="12" fill="#444" font-family="monospace">PERSON: John</text>
+    <text x="1065" y="300" text-anchor="middle" font-size="12" fill="#444" font-family="monospace">PHONE: 555-0142</text>
+    <text x="1065" y="324" text-anchor="middle" font-size="11" fill="#888" font-family="Helvetica, Arial, sans-serif">→ to pseudonymizer</text>
+  </g>
+</svg>

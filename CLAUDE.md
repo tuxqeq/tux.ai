@@ -33,10 +33,10 @@ python src/tokenize_file.py --input data.txt --key "32ByteSecureKeyForAES256!!!!
 python src/hybrid_detect.py
 
 # Generate synthetic training data
-python src/generate_data.py --count 100000 --output data/train_data_large.json
+python src/generate_data.py --split train --seed 42 --count 100000 --output data/train_data_v3.json
 
-# Train model
-python src/train.py --data_file data/train_data_large.json --epochs 5 --output_dir models/pii_model_large
+# Train model (full pipeline: train data + held-out test set + smoke test + training)
+bash scripts/retrain_detector.sh
 
 # Smoke test (quick training validation)
 python src/train.py --smoke_test
@@ -60,8 +60,9 @@ python src/train.py --smoke_test
 - `src/inference.py` — CLI inference using `HybridDetector`
 
 ### Models
-- `models/pii_model_advanced/` — Default model used by `hybrid_detect.py`
-- `models/pii_model_large/` — Production model trained on 100K samples
+- `models/pii_model_v3/` — Default model; trained on the train-split templates (`data/train_data_v3.json`)
+- `models/pii_model_v2/` — Old model (Apr 2026); weights lost, only configs and trainer logs remain
+- Held-out-template test set: `data/test_heldout_templates.json` (`generate_data.py --split test`)
 - Models are excluded from git (see `.gitignore`)
 - Run `python src/train.py --smoke_test` to verify training pipeline before a full run
 

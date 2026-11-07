@@ -26,8 +26,8 @@ class Settings(BaseSettings):
     OLLAMA_MODEL: str = "tux-ai-chat"
 
     # PII model path (relative to project root).
-    # Falls back through pii_model_v2 → pii_model if the primary is missing.
-    MODEL_PATH: str = "models/pii_model_v2"
+    # Falls back through pii_model_v2 → pii_model → Presidio-only if the primary is missing.
+    MODEL_PATH: str = "models/pii_model_v3"
 
     # gRPC
     GRPC_PORT: int = 50051

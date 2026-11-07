@@ -10,12 +10,12 @@ Usage:
     python src/tokenize_file.py --input data/train_data.json
 
     python src/tokenize_file.py --input corpus.txt --key "32ByteSecureKeyForAES256!!!!!!!!"
-    python src/tokenize_file.py --input data/train_data.json --no-ai --model-path models/pii_model_large
+    python src/tokenize_file.py --input data/train_data.json --no-ai --model-path models/pii_model_v3
 """
 
 # ── Defaults ──────────────────────────────────────────────────────────────────
 DEFAULT_AES_KEY    = "16ByteSecureKey!"          # 16-byte AES-128 key
-DEFAULT_MODEL_PATH = "models/pii_model_v2" # pre-trained PII model
+DEFAULT_MODEL_PATH = "models/pii_model_v3" # pre-trained PII model
 # ──────────────────────────────────────────────────────────────────────────────
 
 import argparse

@@ -76,7 +76,8 @@ app.include_router(chats.router)
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok"}
+    from api.services.tokenizer import detector_mode
+    return {"status": "ok", **detector_mode(settings.MODEL_PATH)}
 
 
 # ── gRPC server lifecycle ──────────────────────────────────────────────────────
@@ -87,6 +88,16 @@ _grpc_server = None
 @app.on_event("startup")
 async def start_grpc():
     global _grpc_server
+    from api.services.tokenizer import detector_mode
+    mode = detector_mode(settings.MODEL_PATH)
+    if mode["detector"] == "presidio-only":
+        logger.warning(
+            "PII detector: PRESIDIO-ONLY. No weights for %s or its fallbacks. "
+            "Train them with: bash scripts/retrain_detector.sh",
+            settings.MODEL_PATH,
+        )
+    else:
+        logger.info("PII detector: hybrid (%s)", mode["pii_model"])
     try:
         from api.grpc.chat_servicer import create_grpc_server
         _grpc_server = create_grpc_server(settings.GRPC_PORT)

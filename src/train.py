@@ -9,6 +9,7 @@ from transformers import (
     AutoModelForTokenClassification,
     TrainingArguments,
     Trainer,
+    TrainerCallback,
     DataCollatorForTokenClassification,
 )
 import evaluate
@@ -57,13 +58,32 @@ def prepare_dataset(
     return Dataset.from_dict(formatted)
 
 
+class MemoryLogCallback(TrainerCallback):
+    """Print accelerator memory every N steps, so a slow leak is visible before the OS kills the run."""
+
+    def __init__(self, every: int = 500):
+        self.every = every
+
+    def on_step_end(self, args, state, control, **kwargs):
+        if state.global_step % self.every == 0 and torch.backends.mps.is_available():
+            gb = torch.mps.driver_allocated_memory() / 1e9
+            print(f"[mem] step {state.global_step}: MPS driver memory {gb:.2f} GB", flush=True)
+
+
 def tokenize_and_align_labels(
     examples: Dict[str, Any],
     tokenizer: Any,
     label2id: Dict[str, int],
+    max_length: int = 64,
 ) -> Dict[str, Any]:
+    # Fixed-length padding: one tensor shape for every batch. With variable shapes,
+    # MPS builds and caches a new graph per shape and memory grows until macOS kills the run.
     tokenized_inputs = tokenizer(
-        examples["tokens"], truncation=True, is_split_into_words=True
+        examples["tokens"],
+        truncation=True,
+        is_split_into_words=True,
+        padding="max_length",
+        max_length=max_length,
     )
     labels = []
     for i, label in enumerate(examples["ner_tags"]):
@@ -112,6 +132,8 @@ def main() -> None:
     parser.add_argument("--output_dir", type=str, default="models/pii_model")
     parser.add_argument("--epochs", type=int, default=3)
     parser.add_argument("--smoke_test", action="store_true")
+    parser.add_argument("--max_length", type=int, default=64,
+                        help="Fixed sequence length (training texts are short: max ~107 chars)")
     args = parser.parse_args()
 
     label_list = [
@@ -146,7 +168,7 @@ def main() -> None:
     dataset = dataset.train_test_split(test_size=0.2, seed=42)
 
     tokenized_datasets = dataset.map(
-        lambda x: tokenize_and_align_labels(x, tokenizer, label2id),
+        lambda x: tokenize_and_align_labels(x, tokenizer, label2id, args.max_length),
         batched=True,
     )
 
@@ -166,6 +188,9 @@ def main() -> None:
         num_train_epochs=1 if args.smoke_test else args.epochs,
         weight_decay=0.01,
         save_strategy="epoch",
+        save_total_limit=2,
+        torch_empty_cache_steps=100,
+        dataloader_pin_memory=False,
         use_cpu=not torch.cuda.is_available() and not torch.backends.mps.is_available(),
     )
 
@@ -177,6 +202,7 @@ def main() -> None:
         tokenizer=tokenizer,
         data_collator=DataCollatorForTokenClassification(tokenizer=tokenizer),
         compute_metrics=build_compute_metrics(id2label, metric),
+        callbacks=[MemoryLogCallback()],
     )
 
     trainer.train()

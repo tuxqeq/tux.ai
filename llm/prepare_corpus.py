@@ -26,7 +26,7 @@ if _SRC_DIR not in sys.path:
 DEFAULT_INPUT_DIR = os.path.join(_REPO_ROOT, "llm", "data", "raw_temp")
 DEFAULT_OUTPUT_DIR = os.path.join(_REPO_ROOT, "llm", "data", "tokenized")
 DEFAULT_AES_KEY = "16ByteSecureKey!"
-DEFAULT_MODEL_PATH = os.path.join(_REPO_ROOT, "models", "pii_model_v2")
+DEFAULT_MODEL_PATH = os.path.join(_REPO_ROOT, "models", "pii_model_v3")
 DEFAULT_MAP_PATH = os.path.join(_REPO_ROOT, "llm", "data", "token_map.json")
 
 

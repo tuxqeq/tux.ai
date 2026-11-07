@@ -1,6 +1,7 @@
 # Production Readiness — Redis Token Map
 
 ## 1. Redis Persistence
+**Status: partly done** — RDB snapshots (`--save 60 1`) in docker-compose.yml, dev.sh, pod.sh. AOF is not enabled.
 Redis is in-memory by default. If it restarts, all token maps are lost and tokenized files become unrecoverable.
 
 **Fix:** Enable AOF persistence in `redis.conf`:
@@ -12,6 +13,7 @@ appendfsync everysec
 ---
 
 ## 2. Connection Pooling
+**Status: done** — `get_pool()` in `src/redis_client.py`.
 A new Redis connection is created on every call. Under load this is wasteful and slow.
 
 **Fix:** Create a shared `redis.ConnectionPool` at startup and reuse it across calls.
@@ -19,6 +21,7 @@ A new Redis connection is created on every call. Under load this is wasteful and
 ---
 
 ## 3. AES Key Management
+**Status: done (minimum)** — `keyref:{session_id}` stores the key id next to the map; API dataset keys are wrapped with `MASTER_KEY` in Postgres. No secrets manager.
 The AES key used to encrypt token map values is never stored alongside the session. If the key is lost, the token map is useless.
 
 **Fix:** Manage keys via a secrets manager:
@@ -29,6 +32,7 @@ The AES key used to encrypt token map values is never stored alongside the sessi
 ---
 
 ## 4. Session ID Tracking
+**Status: done** — `filemap:{filename}` in `src/redis_client.py`.
 The session ID is the only handle to a token map. Currently it is printed to stdout and then lost — there is no index linking filenames to session IDs.
 
 **Fix:** Write a secondary Redis key on every tokenization run:
@@ -40,6 +44,7 @@ This allows lookup of a token map by filename later.
 ---
 
 ## 5. No Default TTL
+**Status: done, but now a risk** — `DEFAULT_TTL` = 30 days. All 3000 token maps in `dump.rdb` expired on 2026-06-25, and Redis drops expired keys when it loads an RDB. Maps for a training corpus must not expire.
 Token maps accumulate in Redis forever with no expiry or cleanup strategy.
 
 **Fix:** Set a sensible default TTL (e.g. 30 days) or implement a scheduled cleanup job.
@@ -47,6 +52,7 @@ Token maps accumulate in Redis forever with no expiry or cleanup strategy.
 ---
 
 ## 6. No Redis Authentication
+**Status: open** — `src/redis_client.py` accepts auth/TLS URLs, but docker-compose.yml, dev.sh and pod.sh run Redis without a password.
 The Redis URL has no password, leaving the token store open on the network.
 
 **Fix:** Require auth in the Redis URL:
@@ -58,6 +64,7 @@ And enforce TLS (`rediss://`) for connections over the network.
 ---
 
 ## 7. No Error Handling on Write
+**Status: done** — `src/tokenize_file.py` removes the output file if the Redis write fails.
 If the Redis write fails after the tokenized file has already been written, the output file exists but the recovery map is lost — with no rollback or alert.
 
 **Fix:** Wrap the Redis write in a try/except. On failure:

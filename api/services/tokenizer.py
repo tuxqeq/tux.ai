@@ -4,6 +4,7 @@ Wraps PIIPseudonymizer + HybridDetector for the API layer.
 Sanitizes input first (strips characters that could spoof token syntax),
 then tokenizes detected PII using the dataset AES key.
 """
+import logging
 import re
 import sys
 import os
@@ -18,11 +19,12 @@ from src.pseudonymize import PIIPseudonymizer
 from src.hybrid_detect import HybridDetector
 
 _MODEL_FALLBACKS = [
-    "models/pii_model_advanced",
-    "models/pii_model_large",
+    "models/pii_model_v3",
     "models/pii_model_v2",
     "models/pii_model",
 ]
+
+logger = logging.getLogger("tuxai")
 
 # Shared detector instance (model loaded once per process)
 _detector: HybridDetector | None = None
@@ -38,11 +40,27 @@ def _resolve_model_path(requested: str) -> tuple[str, bool]:
     return requested, False  # Presidio-only fallback
 
 
+def detector_mode(model_path: str) -> dict:
+    """What the detector will run as, without loading the model (for /api/health)."""
+    resolved_path, use_ai = _resolve_model_path(model_path)
+    return {
+        "detector": "hybrid" if use_ai else "presidio-only",
+        "pii_model": os.path.basename(resolved_path) if use_ai else None,
+    }
+
+
 def get_detector(model_path: str) -> HybridDetector:
     global _detector
     if _detector is None:
         resolved_path, use_ai = _resolve_model_path(model_path)
-        _detector = HybridDetector(model_path=resolved_path, use_ai=use_ai)
+        if not use_ai:
+            logger.warning(
+                "No PII model weights found (requested %s). Detection runs PRESIDIO-ONLY.",
+                model_path,
+            )
+        elif resolved_path != model_path:
+            logger.warning("PII model %s not found; using fallback %s", model_path, resolved_path)
+        _detector = HybridDetector(ai_model_path=resolved_path, use_ai=use_ai)
     return _detector
 
 

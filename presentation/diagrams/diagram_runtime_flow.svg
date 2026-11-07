@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1300 620" font-family="Georgia, 'Times New Roman', serif">
+  <rect width="1300" height="620" fill="#f1f1ef"/>
+
+  <!-- Lanes (5 vertical actors) -->
+  <g font-family="Helvetica, Arial, sans-serif" font-size="14" fill="#111">
+    <text x="120" y="60" text-anchor="middle" font-weight="bold">User · Browser</text>
+    <text x="380" y="60" text-anchor="middle" font-weight="bold">FastAPI · gRPC</text>
+    <text x="640" y="60" text-anchor="middle" font-weight="bold">Detector · Tokenizer</text>
+    <text x="900" y="60" text-anchor="middle" font-weight="bold">Ollama LLM</text>
+    <text x="1160" y="60" text-anchor="middle" font-weight="bold">RBAC Decryptor</text>
+  </g>
+
+  <!-- Vertical lifelines -->
+  <g stroke="#999" stroke-width="1" stroke-dasharray="3 4">
+    <line x1="120" y1="80" x2="120" y2="580"/>
+    <line x1="380" y1="80" x2="380" y2="580"/>
+    <line x1="640" y1="80" x2="640" y2="580"/>
+    <line x1="900" y1="80" x2="900" y2="580"/>
+    <line x1="1160" y1="80" x2="1160" y2="580"/>
+  </g>
+
+  <!-- Step 1: user → API -->
+  <g>
+    <line x1="120" y1="120" x2="380" y2="120" stroke="#111" stroke-width="1.6"/>
+    <polygon points="380,120 370,114 370,126" fill="#111"/>
+    <text x="250" y="112" text-anchor="middle" font-size="13" fill="#111" font-family="Helvetica, Arial, sans-serif">prompt (with real PII)</text>
+    <text x="250" y="135" text-anchor="middle" font-size="11" fill="#666" font-family="Helvetica, Arial, sans-serif">gRPC-Web · JWT auth</text>
+  </g>
+
+  <!-- Step 2: API → Detector -->
+  <g>
+    <line x1="380" y1="190" x2="640" y2="190" stroke="#111" stroke-width="1.6"/>
+    <polygon points="640,190 630,184 630,196" fill="#111"/>
+    <text x="510" y="182" text-anchor="middle" font-size="13" fill="#111" font-family="Helvetica, Arial, sans-serif">detect &amp; tokenize</text>
+  </g>
+
+  <!-- Step 3: Tokenizer back to API -->
+  <g>
+    <line x1="640" y1="240" x2="380" y2="240" stroke="#111" stroke-width="1.6"/>
+    <polygon points="380,240 390,234 390,246" fill="#111"/>
+    <text x="510" y="232" text-anchor="middle" font-size="13" fill="#111" font-family="Helvetica, Arial, sans-serif">tokenized prompt</text>
+    <text x="510" y="255" text-anchor="middle" font-size="11" fill="#666" font-family="monospace">[PERSON_a1b2] · [SSN_c3d4]</text>
+  </g>
+
+  <!-- Step 4: API → Ollama -->
+  <g>
+    <line x1="380" y1="310" x2="900" y2="310" stroke="#111" stroke-width="1.6"/>
+    <polygon points="900,310 890,304 890,316" fill="#111"/>
+    <text x="640" y="302" text-anchor="middle" font-size="13" fill="#111" font-family="Helvetica, Arial, sans-serif">chat history + tokens</text>
+    <text x="640" y="325" text-anchor="middle" font-size="11" fill="#666" font-family="Helvetica, Arial, sans-serif">Ollama sees only tokens</text>
+  </g>
+
+  <!-- Step 5: Ollama streams to RBAC -->
+  <g>
+    <line x1="900" y1="380" x2="1160" y2="380" stroke="#111" stroke-width="1.6"/>
+    <polygon points="1160,380 1150,374 1150,386" fill="#111"/>
+    <text x="1030" y="372" text-anchor="middle" font-size="13" fill="#111" font-family="Helvetica, Arial, sans-serif">tokenized response (stream)</text>
+  </g>
+
+  <!-- Step 6: RBAC checks grants -->
+  <g>
+    <rect x="1080" y="410" width="160" height="60" rx="6" fill="#fff" stroke="#111" stroke-width="1.4"/>
+    <text x="1160" y="435" text-anchor="middle" font-size="12" fill="#111" font-family="Helvetica, Arial, sans-serif">check user grants</text>
+    <text x="1160" y="455" text-anchor="middle" font-size="12" fill="#111" font-family="Helvetica, Arial, sans-serif">+ write audit log</text>
+  </g>
+
+  <!-- Step 7: RBAC → user -->
+  <g>
+    <line x1="1160" y1="510" x2="120" y2="510" stroke="#111" stroke-width="1.6"/>
+    <polygon points="120,510 130,504 130,516" fill="#111"/>
+    <text x="640" y="502" text-anchor="middle" font-size="13" fill="#111" font-family="Helvetica, Arial, sans-serif">response — decrypted per role</text>
+    <text x="640" y="525" text-anchor="middle" font-size="11" fill="#666" font-family="Helvetica, Arial, sans-serif">admin: plaintext · analyst: partial · viewer: tokens</text>
+  </g>
+
+  <!-- Bottom note -->
+  <text x="650" y="585" text-anchor="middle" font-size="13" fill="#444" font-family="Helvetica, Arial, sans-serif">
+    The LLM never sees real PII. Persisted messages are tokenized. Decryption happens last, per user, per token.
+  </text>
+</svg>

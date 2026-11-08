@@ -6,8 +6,9 @@ D-19 (frozen detector v4), D-22 (corpus v2), D-23 (RAG), D-25 (deployment fixes)
 ## 0. On the Mac, once
 
 1. Commit and push (`git push`).
-2. Put detector v4 on Hugging Face. The repo `tuxqeq/tux-ai-pii-detector` holds **v3** at the
-   moment. Tag it, then upload v4 and tag that (one line each):
+2. Detector v4 on Hugging Face — **done 2026-11-08**. `tuxqeq/tux-ai-pii-detector`: tag `v3`
+   (sha256 of model.safetensors `e9538f67…381d`), tag `v4` and `main` (`5c54c13d…f67d`).
+   The commands that did it (for a future model, tag the old one first):
 
 ```bash
 .venv/bin/python -c "from huggingface_hub import HfApi; HfApi().create_tag('tuxqeq/tux-ai-pii-detector', tag='v3', exist_ok=True)"

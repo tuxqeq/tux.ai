@@ -39,18 +39,109 @@ _KEYWORD_PREFIX_LABELS = {
 }
 
 
+_KEYWORD_SEP = re.compile(r"[\s:=#]")
+_KEYWORD_DASH = re.compile(r"[A-Za-z_ ]+-")
+
+
 def _trim_keyword_prefix(text: str, start: int, end: int, label: str):
-    """Strip leading keyword word(s) captured by with-label patterns."""
+    """Strip leading keyword word(s) captured by with-label patterns
+    ("Username: jdoe" -> "jdoe", "login=jdoe" -> "jdoe", "VIN-1HG..." -> "1HG...")."""
     if label not in _KEYWORD_PREFIX_LABELS:
         return start, end
     span = text[start:end]
-    for sep in (" ", ":", "-"):
-        idx = span.rfind(sep)
-        if idx != -1:
-            new_start = start + idx + 1
-            if new_start < end:
-                return new_start, end
+    cuts = [m.end() for m in _KEYWORD_SEP.finditer(span)]
+    if cuts and cuts[-1] < len(span):
+        return start + cuts[-1], end
+    m = _KEYWORD_DASH.match(span)
+    if not cuts and m and m.end() < len(span):
+        return start + m.end(), end
     return start, end
+
+
+_MONTHS = r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?"
+_FORMAT_CHECKS = {
+    "EMAIL": lambda v: re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", v) is not None,
+    "SSN": lambda v: re.fullmatch(r"\d{3}[-\s]?\d{2}[-\s]?\d{4}", v) is not None,
+    "CREDIT_CARD": lambda v: re.fullmatch(r"[\d\s-]+", v) is not None
+                             and 13 <= len(re.sub(r"\D", "", v)) <= 19,
+    "MAC": lambda v: re.fullmatch(r"(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}", v) is not None
+                     or re.fullmatch(r"(?:[0-9A-Fa-f]{4}\.){2}[0-9A-Fa-f]{4}", v) is not None,
+    "VIN": lambda v: re.fullmatch(r"(?=[A-Za-z0-9]*\d)[A-Za-z0-9]{11,17}", v) is not None,
+}
+
+
+def _valid_ip(v: str) -> bool:
+    import ipaddress
+    try:
+        ipaddress.ip_address(v.split("/")[0])
+        return True
+    except ValueError:
+        return False
+
+
+def _valid_phone(v: str) -> bool:
+    m = re.fullmatch(r"([+\d\s().-]+?)(?:\s*(?:x|ext\.?)\s*\d{1,6})?", v, re.IGNORECASE)
+    return m is not None and 7 <= len(re.sub(r"\D", "", m.group(1))) <= 15
+
+
+def _valid_date(v: str) -> bool:
+    return (re.search(r"\d{1,4}[/.-]\d{1,2}[/.-]\d{1,4}", v) is not None
+            or re.search(_MONTHS + r"\s*\d{1,2}(?:st|nd|rd|th)?,?\s*\d{2,4}", v, re.IGNORECASE) is not None
+            or re.search(r"\d{1,2}(?:st|nd|rd|th)?\s+" + _MONTHS + r",?\s*\d{2,4}", v, re.IGNORECASE) is not None)
+
+
+_FORMAT_CHECKS.update({"IP_ADDRESS": _valid_ip, "PHONE": _valid_phone, "DOB": _valid_date})
+
+
+_RELABEL_ORDER = ("EMAIL", "IP_ADDRESS", "MAC", "SSN", "CREDIT_CARD", "DOB", "PHONE", "VIN")
+_ADJ_GAP = re.compile(r"[\s-]{1,3}")
+
+
+def merge_adjacent(spans: List[DetectionResult], text: str) -> List[DetectionResult]:
+    """Join consecutive AI spans of the same structured label separated only by spaces/dashes
+    (the model often marks each group of "4916 7835 2198 6547" as its own entity)."""
+    out: List[DetectionResult] = []
+    for s in sorted(spans, key=lambda x: x["start"]):
+        if (out and out[-1]["label"] == s["label"] and s["label"] in _FORMAT_CHECKS
+                and _ADJ_GAP.fullmatch(text[out[-1]["end"]:s["start"]])):
+            prev = dict(out[-1])
+            prev["end"] = s["end"]
+            prev["text"] = text[prev["start"]:prev["end"]]
+            prev["score"] = min(prev["score"], s["score"])
+            out[-1] = prev
+        else:
+            out.append(dict(s))
+    return out
+
+
+def validate_spans(spans: List[DetectionResult], text: str, mode: str) -> List[DetectionResult]:
+    """Format checks on AI spans (structured labels only).
+    mode "drop": a span that fails its label's check is removed.
+    mode "relabel": it takes the first label whose check it passes, otherwise it is removed.
+    mode "relabel_or_pii": as "relabel", but otherwise it is kept with the generic label PII
+    (keeps coverage of real PII the model typed wrongly)."""
+    if not mode or mode == "off":
+        return spans
+    out: List[DetectionResult] = []
+    for s in merge_adjacent(spans, text):
+        if valid_format(s["label"], s["text"]):
+            out.append(s)
+            continue
+        if mode == "drop":
+            continue
+        new = next((l for l in _RELABEL_ORDER if l != s["label"] and valid_format(l, s["text"])), None)
+        if new is None and mode == "relabel_or_pii":
+            new = "PII"
+        if new is not None:
+            out.append({**s, "label": new})
+    return out
+
+
+def valid_format(label: str, value: str) -> bool:
+    """Format check for structured AI labels (free-form labels such as PER, ORG always pass).
+    Removes AI spans like "1.1" as IP_ADDRESS, "16:30" as MAC, "1920x1080" as PHONE, "N/A" as DOB."""
+    check = _FORMAT_CHECKS.get(label)
+    return True if check is None else bool(check(value.strip()))
 
 
 _WORD_RE = re.compile(r"\S+")
@@ -97,22 +188,49 @@ def words_to_spans(text: str, word_spans, labels, scores, threshold: float) -> L
     return results
 
 
-def _tie_priority(r: DetectionResult) -> int:
-    """Label priority when spans have the same length (see HybridDetector.combine_union)."""
+def _tie_priority(r: DetectionResult, prefer: str = "ai") -> int:
+    """Label priority when spans have the same length (see HybridDetector.combine_union).
+    prefer="ai": AI label wins, except a Presidio label the AI cannot predict (more specific).
+    prefer="presidio": Presidio label always wins.
+    prefer="ai_first" / "ai_first_specific": filtered in combine_union, then the rule below."""
+    if prefer == "presidio":
+        return 1 if r["source"] == "PRESIDIO" else 0
     if r["source"] == "AI_MODEL":
         return 1
     return 0 if r["label"] in PRESIDIO_TO_AI_LABEL else 2
 
 
+def word_windows(text: str, word_spans, max_words: int = 32) -> List[List[int]]:
+    """Split word indices into windows: a new window starts after a line break or after
+    max_words words. The model was fine-tuned on single sentences of <= 40 tokens, so
+    short windows keep inference close to the training distribution."""
+    windows: List[List[int]] = []
+    cur: List[int] = []
+    for i, (s, e) in enumerate(word_spans):
+        cur.append(i)
+        next_start = word_spans[i + 1][0] if i + 1 < len(word_spans) else len(text)
+        if len(cur) >= max_words or "\n" in text[e:next_start]:
+            windows.append(cur)
+            cur = []
+    if cur:
+        windows.append(cur)
+    return windows
+
+
 class HybridDetector:
-    def __init__(self, ai_model_path: str = "models/pii_model_v3",
-                 use_ai: bool = True, ai_threshold: float = 0.95):
+    def __init__(self, ai_model_path: str = "models/pii_model_v4",
+                 use_ai: bool = True, ai_threshold: float = 0.95,
+                 presidio_score_threshold: float = 0.0, validate_ai_formats=False,
+                 tie_prefer: str = "ai_first"):
         if not (0.0 <= ai_threshold <= 1.0):
             raise ValueError(f"ai_threshold must be between 0 and 1, got {ai_threshold}")
 
         print("Initializing Hybrid Detector (AI + `Presidio`)...")
         self.use_ai = use_ai
         self.ai_threshold = ai_threshold
+        self.presidio_score_threshold = presidio_score_threshold
+        self.validate_ai_formats = validate_ai_formats
+        self.tie_prefer = tie_prefer
 
         print("Loading `Presidio` analyzer...")
         self.analyzer = AnalyzerEngine()
@@ -150,6 +268,9 @@ class HybridDetector:
             entities=PRESIDIO_ENTITIES,
             language="en",
         )
+        thr = getattr(self, "presidio_score_threshold", 0.0)
+        if thr > 0:
+            presidio_results = [r for r in presidio_results if r.score >= thr]
 
         # Deduplicate overlapping Presidio spans, keeping highest score
         sorted_pres = sorted(presidio_results, key=lambda r: (r.start, -r.score))
@@ -219,40 +340,51 @@ class HybridDetector:
             ))
         return results
 
-    def _ai_word_level(self, text: str) -> List[DetectionResult]:
+    def _ai_word_level(self, text: str, max_words: int = 32) -> List[DetectionResult]:
         import torch
         word_spans = [(m.start(), m.end()) for m in _WORD_RE.finditer(text)]
         if not word_spans:
             return []
         tok, model = self.ai_classifier.tokenizer, self.ai_classifier.model
-        enc = tok([text[s:e] for s, e in word_spans], is_split_into_words=True,
-                  truncation=True, max_length=512, return_tensors="pt")
-        word_ids = enc.word_ids(0)
+        windows = word_windows(text, word_spans, max_words)
+        enc = tok([[text[word_spans[w][0]:word_spans[w][1]] for w in win] for win in windows],
+                  is_split_into_words=True, truncation=True, max_length=128,
+                  padding=True, return_tensors="pt")
         with torch.no_grad():
-            logits = model(**{k: v.to(model.device) for k, v in enc.items()}).logits[0]
+            logits = model(**{k: v.to(model.device) for k, v in enc.items()}).logits
         probs = torch.softmax(logits, dim=-1).cpu()
         labels = ["O"] * len(word_spans)
         scores = [1.0] * len(word_spans)
-        seen = set()
-        for pos, wid in enumerate(word_ids):
-            if wid is None or wid in seen:
-                continue
-            seen.add(wid)
-            p, idx = probs[pos].max(dim=-1)
-            labels[wid] = model.config.id2label[int(idx)]
-            scores[wid] = float(p)
-        return words_to_spans(text, word_spans, labels, scores, self.ai_threshold)
+        for b, win in enumerate(windows):
+            seen = set()
+            for pos, wid in enumerate(enc.word_ids(b)):
+                if wid is None or wid in seen:
+                    continue
+                seen.add(wid)
+                p, idx = probs[b, pos].max(dim=-1)
+                labels[win[wid]] = model.config.id2label[int(idx)]
+                scores[win[wid]] = float(p)
+        spans = words_to_spans(text, word_spans, labels, scores, self.ai_threshold)
+        mode = getattr(self, "validate_ai_formats", False)
+        if mode:
+            spans = validate_spans(spans, text, "drop" if mode is True else mode)
+        return spans
 
     @staticmethod
     def combine_union(presidio_results: List[DetectionResult],
-                      ai_results: List[DetectionResult], text: str) -> List[DetectionResult]:
-        """Production hybrid rule (since 2026-11-07): union of both layers. Overlapping spans merge
-        into one span that covers all of them; its label comes from the longest member.
-        Tie on length: a Presidio label the AI model cannot predict (AWS_KEY, IBAN_CODE, ...) wins,
-        because it is more specific; otherwise the AI label wins.
-
-        Chosen on eval/eval_detector.py results: vs. the old rule (combine), leaked PII characters
-        on held-out templates fell from 8.9% to 0.06% and typed F1 rose from 0.910 to 0.994.
+                      ai_results: List[DetectionResult], text: str,
+                      tie_prefer: str = "ai_first") -> List[DetectionResult]:
+        """Production hybrid rule: union of both layers. Overlapping spans merge into one span that
+        covers all of them (coverage never drops below either layer).
+        Label (tie_prefer):
+          "ai_first" (production since 2026-11-08, pii_model_v4): if the group has an AI span, the
+              longest AI span gives the label; otherwise the longest Presidio span.
+          "ai" (2026-11-07): longest member; on equal length the AI label, except a Presidio type
+              the AI cannot predict.
+          "ai_first_specific": as ai_first, but Presidio types the AI cannot predict also compete.
+          "presidio": longest member; on equal length the Presidio label.
+        Chosen on the Nemotron-PII dev set (thesis decision log D-18): ai_first F1 0.929 vs 0.909
+        ("ai") and 0.913 ("ai_first_specific"), same leak 2.0 %.
         """
         spans = sorted(list(presidio_results) + list(ai_results), key=lambda r: (r["start"], -r["end"]))
         groups = []
@@ -264,7 +396,13 @@ class HybridDetector:
                 groups.append({"start": r["start"], "end": r["end"], "members": [r]})
         results: List[DetectionResult] = []
         for g in groups:
-            best = max(g["members"], key=lambda r: (r["end"] - r["start"], _tie_priority(r)))
+            members = g["members"]
+            if tie_prefer in ("ai_first", "ai_first_specific") and any(m["source"] == "AI_MODEL" for m in members):
+                # the AI label decides; "ai_first_specific" also keeps Presidio types the AI cannot
+                # predict (AWS_KEY, IBAN_CODE, ...) so RBAC grants on those types still match
+                members = [m for m in members if m["source"] == "AI_MODEL"
+                           or (tie_prefer == "ai_first_specific" and m["label"] not in PRESIDIO_TO_AI_LABEL)]
+            best = max(members, key=lambda r: (r["end"] - r["start"], _tie_priority(r, tie_prefer)))
             results.append(DetectionResult(start=g["start"], end=g["end"], label=best["label"],
                                            text=text[g["start"]:g["end"]], source=best["source"],
                                            score=best["score"]))
@@ -289,7 +427,8 @@ class HybridDetector:
     def detect(self, text: str) -> List[DetectionResult]:
         """Presidio + word-level AI, merged with combine_union."""
         return self.combine_union(self.detect_presidio(text),
-                                  self.detect_ai(text, granularity="word"), text)
+                                  self.detect_ai(text, granularity="word"), text,
+                                  getattr(self, "tie_prefer", "ai_first"))
 
     def encrypt_text(self, text: str, results: List[DetectionResult], aes_key: bytes) -> str:
         """Encrypt detected PII spans in text using AES (reversible)."""
@@ -331,7 +470,7 @@ def main() -> None:
     group.add_argument("--text", type=str, help="Text to analyze")
     group.add_argument("--file", type=str, help="File to analyze")
     parser.add_argument("--output", type=str, help="Output file for encrypted text")
-    parser.add_argument("--model-path", type=str, default="models/pii_model_v3",
+    parser.add_argument("--model-path", type=str, default="models/pii_model_v4",
                         help="Path to AI model")
     parser.add_argument("--encrypt", action="store_true", help="Encrypt detected PII")
     parser.add_argument("--key", type=str, default="16ByteSecureKey!",

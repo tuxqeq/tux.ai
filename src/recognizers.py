@@ -57,7 +57,10 @@ def create_custom_recognizers() -> List[PatternRecognizer]:
         supported_entity="INSURANCE_NUMBER",
         patterns=[
             Pattern("insurance_policy", r"\b[A-Z]{2,4}\d{6,12}\b", 0.6),
-            Pattern("policy_with_prefix", r"\b(?:Policy|Member|Group)[-:\s#]*[A-Z0-9]{6,15}\b", 0.8),
+            # Needs a separator and a digit in the value: "Policyholder", "Group covers" must not match
+            Pattern("policy_with_prefix",
+                    r"\b(?:Policy|Member|Group)(?:\s*(?:No\.?|Number|ID|#))?\s*[-:#]\s*(?=[A-Z0-9-]*\d)[A-Z0-9][A-Z0-9-]{5,19}\b",
+                    0.8),
         ],
         context=["insurance", "policy", "coverage", "claim", "beneficiary", "premium"]
     ))
@@ -98,7 +101,8 @@ def create_custom_recognizers() -> List[PatternRecognizer]:
     recognizers.append(PatternRecognizer(
         supported_entity="API_KEY",
         patterns=[
-            Pattern("api_key_pattern", r"\b[A-Za-z0-9_-]{32,}\b", 0.3),
+            # Needs a letter and a digit: a line of underscores is not a key
+            Pattern("api_key_pattern", r"\b(?=[A-Za-z0-9_-]*[A-Za-z])(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9_-]{32,}\b", 0.3),
             Pattern("api_key_with_label", r"\b(?:API[_\s-]?KEY|TOKEN|SECRET)[-:\s=]*['\"]?[A-Za-z0-9_-]{20,}['\"]?", 0.85),
         ],
         context=["API", "key", "token", "secret", "auth", "authorization"]
@@ -107,7 +111,10 @@ def create_custom_recognizers() -> List[PatternRecognizer]:
     recognizers.append(PatternRecognizer(
         supported_entity="USERNAME",
         patterns=[
-            Pattern("username_pattern", r"\b(?:user|username|login)[-:\s=]+[A-Za-z0-9_.-]{3,20}\b", 0.75),
+            # Needs ":" or "=": "User Name John", "user role" must not match (Presidio uses IGNORECASE)
+            Pattern("username_pattern",
+                    r"\b(?:user\s?name|user\s?id|login)\s*[:=]\s*(?=[A-Za-z0-9_.@-]*[A-Za-z0-9])[A-Za-z0-9_.@-]{3,40}\b",
+                    0.75),
             Pattern("username_bare", r"\b[a-z][a-z0-9]{2,15}_(?:admin|dev|user|secure|ops|root|sys)\b", 0.7),
         ],
         context=["user", "username", "login", "account", "credential"]

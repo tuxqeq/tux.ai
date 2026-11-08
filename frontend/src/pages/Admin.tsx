@@ -3,7 +3,7 @@ import { admin, type AdminUser, type Dataset, type RbacGrant } from "@/lib/api";
 
 const ENTITY_TYPES = [
   "PERSON", "EMAIL", "PHONE", "SSN", "CREDIT_CARD", "DOB", "LOCATION",
-  "ORG", "API_KEY", "AWS_KEY", "MRN", "BANK", "IP", "USERNAME", "VIN", "*",
+  "ORG", "API_KEY", "AWS_KEY", "MRN", "BANK", "IP", "USERNAME", "VIN", "DL", "PII", "*",
 ];
 
 const inputCls =

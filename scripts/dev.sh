@@ -139,7 +139,7 @@ else
 fi
 
 echo "[check] Checking PII model..."
-for MODEL_DIR in models/pii_model_v3 models/pii_model_v2 models/pii_model; do
+for MODEL_DIR in models/pii_model_v4 models/pii_model_v3 models/pii_model_v2 models/pii_model; do
     if [ -f "$ROOT/$MODEL_DIR/model.safetensors" ]; then
         echo "  ✓ Using PII model: $MODEL_DIR"
         export MODEL_PATH="$MODEL_DIR"

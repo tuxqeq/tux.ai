@@ -19,6 +19,7 @@ from src.pseudonymize import PIIPseudonymizer
 from src.hybrid_detect import HybridDetector
 
 _MODEL_FALLBACKS = [
+    "models/pii_model_v4",
     "models/pii_model_v3",
     "models/pii_model_v2",
     "models/pii_model",

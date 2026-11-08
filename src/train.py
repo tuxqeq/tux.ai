@@ -157,6 +157,8 @@ def main() -> None:
         "B-MAC",          "I-MAC",
         "B-EMP_ID",       "I-EMP_ID",
         "B-INSURANCE",    "I-INSURANCE",
+        # v4: generic PII = identifiers outside the 19 types (passwords, PINs, cookies, plates, ...)
+        "B-PII",          "I-PII",
     ]
     label2id: Dict[str, int] = {l: i for i, l in enumerate(label_list)}
     id2label: Dict[int, str] = {i: l for i, l in enumerate(label_list)}

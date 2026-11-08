@@ -177,7 +177,7 @@ All settings live in `.env.local` and are loaded by [api/config.py](api/config.p
 | `REDIS_URL`    | `redis://localhost:6379`                                | Token recovery map                                 |
 | `OLLAMA_URL`   | `http://localhost:11434`                                | Docker uses `http://host.docker.internal:11434`    |
 | `OLLAMA_MODEL` | `tux-ai-chat`                                           | Global default; a dataset may override it          |
-| `MODEL_PATH`   | `models/pii_model_v3`                                   | Falls back through `pii_model_v2` → `pii_model` → Presidio-only |
+| `MODEL_PATH`   | `models/pii_model_v4`                                   | Falls back through `pii_model_v3` → `pii_model_v2` → `pii_model` → Presidio-only |
 | `GRPC_PORT`    | `50051`                                                 |                                                    |
 
 Rotating `MASTER_KEY` invalidates every stored dataset key — it needs a re-wrap migration, not a
@@ -260,8 +260,11 @@ python src/cli.py
 # Verify the pipeline end-to-end in ~a minute
 python src/train.py --smoke_test
 
-# Full run — generates train-split data + a held-out-template test set, trains models/pii_model_v3
+# v3 (templates only): train-split data + held-out-template test set → models/pii_model_v3
 bash scripts/retrain_detector.sh
+
+# v4 (production): Nemotron-PII documents + templates → models/pii_model_v4 (needs internet once)
+bash scripts/retrain_detector_v4.sh
 ```
 
 `src/generate_data.py --split train|test --seed N` splits the 257 templates deterministically

@@ -53,7 +53,7 @@ LABEL_NORM: Dict[str, str] = {
     "MAC_ADDRESS":          "MAC",
     "SECURITY_BADGE":       "BADGE",
     "GRANT_NUMBER":         "GRANT",
-    "AWS_KEY":              "AWS_KEY",
+    "AWS_KEY":              "API_KEY",   # one key type: the AI layer labels AWS keys API_KEY
     "SERVICE_API_KEY":      "API_KEY",
     "DB_CONNECTION":        "DB_CONN",
     "LICENSE_PLATE":        "PLATE",

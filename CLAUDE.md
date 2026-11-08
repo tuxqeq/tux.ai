@@ -60,7 +60,8 @@ python src/train.py --smoke_test
 - `src/inference.py` — CLI inference using `HybridDetector`
 
 ### Models
-- `models/pii_model_v3/` — Default model; trained on the train-split templates (`data/train_data_v3.json`)
+- `models/pii_model_v4/` — Default model; Nemotron-PII documents + templates (`src/build_train_mix.py`, `scripts/retrain_detector_v4.sh`); 41 BIO labels incl. generic PII
+- `models/pii_model_v3/` — Trained on the train-split templates only (`data/train_data_v3.json`)
 - `models/pii_model_v2/` — Old model (Apr 2026); weights lost, only configs and trainer logs remain
 - Held-out-template test set: `data/test_heldout_templates.json` (`generate_data.py --split test`)
 - Models are excluded from git (see `.gitignore`)

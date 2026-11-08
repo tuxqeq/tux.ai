@@ -62,7 +62,7 @@ services:
       JWT_SECRET: ${JWT_SECRET:-CHANGE_ME_in_production_32_chars!!}
       OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
       OLLAMA_MODEL: tux-ai-chat
-      MODEL_PATH: models/pii_model_v3
+      MODEL_PATH: models/pii_model_v4
     volumes:
       # Bind-mount local models so they don't need to be baked in
       - ./models:/app/models:ro

@@ -17,7 +17,7 @@ from presidio_anonymizer.entities import OperatorConfig, RecognizerResult
 sys.path.insert(0, os.path.dirname(__file__))
 import redis_client as rc
 
-TOKEN_RE = re.compile(r'\[[A-Z_]{1,20}_[0-9a-f]{8}\]')
+TOKEN_RE = re.compile(r'\[[A-Z_]{1,20}_[0-9a-f]{8,16}\]')
 
 _deanonymizer = DeanonymizeEngine()
 

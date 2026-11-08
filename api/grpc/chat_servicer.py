@@ -24,7 +24,7 @@ from api.db import AsyncSessionLocal
 from api.models import ChatSession, Dataset, EncryptionKey, Message, User
 from api.security import decode_access_token, decrypt_aes_key
 from api.services.audit import log_decryptions
-from api.services.decryptor import get_allowed_entity_types, resolve_tokens
+from api.services.decryptor import StreamingTokenResolver, get_allowed_entity_types, resolve_tokens
 from api.services.ollama import stream_chat
 from api.services.tokenizer import tokenize_message
 
@@ -180,13 +180,20 @@ class ChatServicer:
             # Stream Ollama response using dataset's model if set
             ollama_model = dataset_model or settings.OLLAMA_MODEL
             assistant_chunks: list[str] = []
+            resolver = StreamingTokenResolver(
+                lambda text: resolve_tokens(text, full_token_map, aes_key or b"", allowed, dataset_token_map)
+            )
             try:
                 async for chunk in stream_chat(history, model=ollama_model):
-                    resolved = resolve_tokens(
-                        chunk, full_token_map, aes_key or b"", allowed, dataset_token_map
-                    )
-                    await log_decryptions(chunk, resolved, user.id, dataset_id, db)
                     assistant_chunks.append(chunk)  # store tokenized version
+                    raw, resolved = resolver.feed(chunk)  # holds back a token split across chunks
+                    if raw:
+                        await log_decryptions(raw, resolved, user.id, dataset_id, db)
+                        if chat_pb2:
+                            yield chat_pb2.ChatChunk(content=resolved, done=False)
+                raw, resolved = resolver.flush()
+                if raw:
+                    await log_decryptions(raw, resolved, user.id, dataset_id, db)
                     if chat_pb2:
                         yield chat_pb2.ChatChunk(content=resolved, done=False)
             except Exception as exc:

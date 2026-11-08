@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.models import AuditLog
 
-_TOKEN_RE = re.compile(r"\[([A-Z_]{1,30})_([0-9a-f]{8})\]")
+_TOKEN_RE = re.compile(r"\[([A-Z_]{1,30})_([0-9a-f]{8,16})\]")
 
 
 async def log_decryptions(

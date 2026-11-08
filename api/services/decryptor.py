@@ -16,7 +16,7 @@ from typing import Set
 from presidio_anonymizer import AnonymizerEngine
 from presidio_anonymizer.entities import OperatorConfig, RecognizerResult
 
-_TOKEN_RE = re.compile(r"\[([A-Z_]{1,30})_([0-9a-f]{8})\]")
+_TOKEN_RE = re.compile(r"\[([A-Z_]{1,30})_([0-9a-f]{8,16})\]")  # 8 = old md5 ids, 12 = HMAC ids
 
 _anonymizer = AnonymizerEngine()
 
@@ -68,6 +68,40 @@ def resolve_tokens(
             return token  # decryption failed — keep token, don't crash stream
 
     return _TOKEN_RE.sub(_replace, text)
+
+
+# A possible token prefix at the end of a streamed buffer: "[", "[PERS", "[PERSON_a1b2", ...
+_TOKEN_PREFIX_RE = re.compile(r"\[[A-Z_]{0,30}[0-9a-f]{0,16}$")
+_MAX_TOKEN_LEN = 1 + 30 + 1 + 16 + 1
+
+
+class StreamingTokenResolver:
+    """Resolve tokens in a streamed reply whose chunks can split a token.
+
+    The LLM streams a few characters per chunk, so "[PERSON_a1b2c3d4e5f6]" usually arrives in
+    pieces; resolving each chunk alone never matches. feed() releases text up to a possible
+    unfinished token at the end and keeps that tail until the next chunk completes or breaks it.
+    """
+
+    def __init__(self, resolve):
+        self._resolve = resolve  # str -> str (e.g. a resolve_tokens partial)
+        self._buf = ""
+
+    def feed(self, chunk: str) -> tuple[str, str]:
+        """Add a chunk; return (raw text released, resolved text released)."""
+        self._buf += chunk
+        cut = len(self._buf)
+        i = self._buf.rfind("[")
+        if (i != -1 and "]" not in self._buf[i:] and len(self._buf) - i <= _MAX_TOKEN_LEN
+                and _TOKEN_PREFIX_RE.match(self._buf, i)):
+            cut = i
+        raw, self._buf = self._buf[:cut], self._buf[cut:]
+        return raw, (self._resolve(raw) if raw else "")
+
+    def flush(self) -> tuple[str, str]:
+        """Release whatever is left at the end of the stream."""
+        raw, self._buf = self._buf, ""
+        return raw, (self._resolve(raw) if raw else "")
 
 
 async def get_allowed_entity_types(

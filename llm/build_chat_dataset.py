@@ -50,13 +50,13 @@ def _infer_record_type(filename: str) -> str:
 
 
 def _extract_tokens(text: str) -> list[str]:
-    return re.findall(r"\[[A-Z_]+_[0-9a-f]{8}\]", text)
+    return re.findall(r"\[[A-Z_]+_[0-9a-f]{8,16}\]", text)
 
 
 def _extract_field_tokens(text: str) -> list[tuple[str, str]]:
     """Return (field_name, token) pairs where field_name is the word before the token."""
     pairs = []
-    for match in re.finditer(r"([A-Za-z ]+):\s*(\[[A-Z_]+_[0-9a-f]{8}\])", text):
+    for match in re.finditer(r"([A-Za-z ]+):\s*(\[[A-Z_]+_[0-9a-f]{8,16}\])", text):
         field = match.group(1).strip().split("\n")[-1].strip("- ")
         token = match.group(2)
         if field and token:

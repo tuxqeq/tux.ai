@@ -8,7 +8,7 @@ interface Props {
 }
 
 function renderContent(content: string): React.ReactNode[] {
-  const TOKEN_RE = /\[([A-Z_]{1,30})_([0-9a-f]{8})\]/g;
+  const TOKEN_RE = /\[([A-Z_]{1,30})_([0-9a-f]{8,16})\]/g;
   const nodes: React.ReactNode[] = [];
   let last = 0;
   let match: RegExpExecArray | null;

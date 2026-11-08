@@ -13,3 +13,6 @@ slowapi>=0.1.9
 python-multipart>=0.0.9
 pydantic[email]>=2.9.0
 pydantic-settings>=2.5.0
+# RAG (thesis decision log D-23)
+chromadb>=1.0.0
+sentence-transformers>=3.0.0

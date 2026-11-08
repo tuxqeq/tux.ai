@@ -29,6 +29,16 @@ class Settings(BaseSettings):
     # Falls back through pii_model_v3 → pii_model_v2 → pii_model → Presidio-only if the primary is missing.
     MODEL_PATH: str = "models/pii_model_v4"
 
+    # Context window for every chat request (Ollama's default is smaller; with RAG the system
+    # prompt holds RAG_TOP_K whole records, ~400 tokens each, plus the chat history).
+    OLLAMA_NUM_CTX: int = 8192
+
+    # RAG over the dataset's tokenized records (thesis decision log D-23). A dataset uses RAG when
+    # scripts/bootstrap_dataset.py has built its index under CHROMA_DB_PATH.
+    RAG_ENABLED: bool = True
+    RAG_TOP_K: int = 3
+    CHROMA_DB_PATH: str = "data/chroma"
+
     # gRPC
     GRPC_PORT: int = 50051
 

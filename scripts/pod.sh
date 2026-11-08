@@ -7,13 +7,37 @@ ROOT="$(dirname "$SCRIPT_DIR")"
 cd "$ROOT"
 
 # ── Load env ───────────────────────────────────────────────────────────────────
-if [ -f .env.local ]; then
-    set -a; source .env.local; set +a
-else
-    echo "Warning: .env.local not found. Copying .env.example → .env.local..."
-    cp .env.example .env.local
-    set -a; source .env.local; set +a
+# A pod is reachable from the internet: never run it with the example secrets. MASTER_KEY wraps the
+# dataset keys in PostgreSQL, so it must stay the same for the life of a dataset (.env.local lives
+# in the repo, i.e. on the /workspace volume).
+if [ ! -f .env.local ]; then
+    echo "[env] .env.local not found: creating it with random MASTER_KEY and JWT_SECRET"
+    python3 - <<'PY'
+import secrets, string, re
+alphabet = string.ascii_letters + string.digits
+rnd = lambda n: "".join(secrets.choice(alphabet) for _ in range(n))
+s = open(".env.example").read()
+s = re.sub(r"^MASTER_KEY=.*$", "MASTER_KEY=" + rnd(32), s, flags=re.M)
+s = re.sub(r"^JWT_SECRET=.*$", "JWT_SECRET=" + rnd(48), s, flags=re.M)
+open(".env.local", "w").write(s)
+PY
+    chmod 600 .env.local
 fi
+set -a; source .env.local; set +a
+if grep -q "CHANGE_ME" .env.local; then
+    echo "ERROR: .env.local still has a CHANGE_ME secret. Set MASTER_KEY and JWT_SECRET first."
+    exit 1
+fi
+
+# Ollama models on the volume, so a pod restart does not download them again
+if [ -d /workspace ]; then
+    export OLLAMA_MODELS="${OLLAMA_MODELS:-/workspace/ollama}"
+    mkdir -p "$OLLAMA_MODELS"
+fi
+
+as_postgres() {  # RunPod images often have no sudo
+    if command -v sudo &>/dev/null; then sudo -u postgres "$@"; else su postgres -c "$(printf '%q ' "$@")"; fi
+}
 
 export DATABASE_URL="postgresql+asyncpg://tuxai:tuxai@localhost:5432/tuxai"
 export REDIS_URL="redis://localhost:6379"
@@ -30,10 +54,10 @@ service postgresql start 2>/dev/null || pg_ctlcluster 14 main start 2>/dev/null 
 sleep 2
 
 # Create user/db if they don't exist
-sudo -u postgres psql -tc "SELECT 1 FROM pg_roles WHERE rolname='tuxai'" | grep -q 1 || \
-    sudo -u postgres psql -c "CREATE USER tuxai WITH PASSWORD 'tuxai';"
-sudo -u postgres psql -tc "SELECT 1 FROM pg_database WHERE datname='tuxai'" | grep -q 1 || \
-    sudo -u postgres psql -c "CREATE DATABASE tuxai OWNER tuxai;"
+as_postgres psql -tc "SELECT 1 FROM pg_roles WHERE rolname='tuxai'" | grep -q 1 || \
+    as_postgres psql -c "CREATE USER tuxai WITH PASSWORD 'tuxai';"
+as_postgres psql -tc "SELECT 1 FROM pg_database WHERE datname='tuxai'" | grep -q 1 || \
+    as_postgres psql -c "CREATE DATABASE tuxai OWNER tuxai;"
 echo "  ✓ PostgreSQL ready"
 
 # ── Redis ──────────────────────────────────────────────────────────────────────
@@ -52,11 +76,10 @@ if ! command -v envoy &>/dev/null; then
     chmod +x /usr/local/bin/envoy
 fi
 
-# Use local yaml (points to 127.0.0.1 instead of docker host alias)
-ENVOY_YAML="envoy/envoy.local.yaml"
-if [ ! -f "$ENVOY_YAML" ]; then
-    ENVOY_YAML="envoy/envoy.yaml"
-fi
+# envoy.local.yaml targets host.docker.internal (Envoy in Docker, see dev.sh); on the pod Envoy runs
+# natively next to the API, so point it at 127.0.0.1
+ENVOY_YAML="/tmp/envoy.pod.yaml"
+sed 's/host\.docker\.internal/127.0.0.1/' envoy/envoy.local.yaml > "$ENVOY_YAML"
 envoy -c "$ENVOY_YAML" --log-level warn &
 ENVOY_PID=$!
 echo "  ✓ Envoy started (gRPC-Web on :8080)"
@@ -128,8 +151,10 @@ fi
 echo "[frontend] Building frontend..."
 (cd frontend && npm run build --silent)
 
+# vite preview serves dist/ WITH the proxy of vite.config.ts (/api -> :8000, /chat.ChatService -> :8080);
+# a plain static server (the old `npx serve`) answered those paths with 404
 echo "[frontend] Serving on :3000..."
-npx --yes serve frontend/dist -l 3000 &
+(cd frontend && npx vite preview --host 0.0.0.0 --port 3000 --strictPort) &
 FRONTEND_PID=$!
 
 # ── API ────────────────────────────────────────────────────────────────────────

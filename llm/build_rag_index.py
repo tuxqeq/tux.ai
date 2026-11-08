@@ -1,6 +1,9 @@
 """
 build_rag_index.py — Index tokenized records into ChromaDB for RAG retrieval.
 
+DEPRECATED (2026-11-08, thesis decision log D-23): one global collection for all datasets, not
+used by the API. Use scripts/bootstrap_dataset.py (per-dataset collection, record + sections).
+
 Reads all .txt files from the output directory, splits them into per-record
 chunks, embeds with sentence-transformers/all-MiniLM-L6-v2, and stores in a
 persistent ChromaDB collection.

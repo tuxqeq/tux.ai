@@ -5,32 +5,21 @@ Reads [LABEL_hexid] tokens from a tokenized file, looks each one up in Redis,
 AES-decrypts the encrypted original value, and writes the restored file.
 """
 
-import base64
 import os
 import re
 import sys
 from typing import Dict, Tuple
 
-from presidio_anonymizer import DeanonymizeEngine
-from presidio_anonymizer.entities import OperatorConfig, RecognizerResult
-
 sys.path.insert(0, os.path.dirname(__file__))
 import redis_client as rc
+from utils import decrypt_value
 
 TOKEN_RE = re.compile(r'\[[A-Z_]{1,20}_[0-9a-f]{8,16}\]')
 
-_deanonymizer = DeanonymizeEngine()
 
 
 def _decrypt_value(encrypted: str, aes_key: bytes) -> str:
-    key_b64 = base64.b64encode(aes_key).decode("utf-8")
-    fake_result = [RecognizerResult(entity_type="PII", start=0, end=len(encrypted), score=1.0)]
-    result = _deanonymizer.deanonymize(
-        text=encrypted,
-        entities=fake_result,
-        operators={"DEFAULT": OperatorConfig("decrypt", {"key": key_b64})},
-    )
-    return result.text
+    return decrypt_value(aes_key, encrypted)  # same cipher key rule as the pseudonymizer (D-22)
 
 
 def decrypt_token_map(

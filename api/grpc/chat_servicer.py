@@ -12,6 +12,7 @@ Handles the StreamChat RPC:
   8. Persist messages to PostgreSQL (tokenized, never plaintext)
 """
 import asyncio
+import logging
 import uuid
 from datetime import datetime, timezone
 
@@ -38,6 +39,8 @@ try:
 except ImportError:
     chat_pb2 = None
     chat_pb2_grpc = None
+
+logger = logging.getLogger("tuxai")
 
 
 async def _get_user(token: str, db: AsyncSession) -> User | None:
@@ -159,6 +162,18 @@ class ChatServicer:
 
             # Build conversation history for Ollama
             history = await _build_ollama_history(session_id, db)
+
+            # RAG (thesis decision log D-23): records of this dataset that match the tokenized
+            # question go into a system message. None = the dataset has no index (no RAG).
+            if dataset_id and settings.RAG_ENABLED:
+                from api.services import rag
+                records = await asyncio.get_event_loop().run_in_executor(
+                    None, rag.context_for_chat, dataset_id, user_content, settings.RAG_TOP_K
+                )
+                if records is not None:
+                    logger.info("RAG dataset=%s records=%s", dataset_id,
+                                [(r["id"], r["match"]) for r in records])
+                    history = [{"role": "system", "content": rag.build_system_prompt(records)}] + history
 
             # RBAC: determine which entity types this user may see
             allowed = await get_allowed_entity_types(user.id, dataset_id, user.role, db)

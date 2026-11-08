@@ -46,7 +46,7 @@ def store_token_map(
     filename: str,
     key_id: str,
     url: str = DEFAULT_REDIS_URL,
-    ttl: int = DEFAULT_TTL,
+    ttl: int | None = DEFAULT_TTL,
 ) -> None:
     """
     Atomically store (or merge into) a token map in Redis with full metadata.
@@ -57,6 +57,9 @@ def store_token_map(
       keyref:{session_id}    — metadata hash (filename, key_id, timestamp, token_count)
 
     When merging into an existing session, token_count reflects the new total.
+    ttl=None or 0: the keys never expire (needed for a dataset corpus: a model trained or a RAG
+    index built on it must resolve its tokens later; with the old 30-day TTL every corpus map in
+    dump.rdb had expired on 2026-06-25).
     Raises redis.RedisError on failure — caller is responsible for rollback.
     """
     if not token_map:
@@ -67,8 +70,12 @@ def store_token_map(
     pipe = r.pipeline(transaction=True)
     pipe.hset(f"tokenmap:{session_id}", mapping=token_map)
     pipe.hlen(f"tokenmap:{session_id}")
-    pipe.expire(f"tokenmap:{session_id}", ttl)
-    pipe.set(f"filemap:{filename}", session_id, ex=ttl)
+    if ttl:
+        pipe.expire(f"tokenmap:{session_id}", ttl)
+        pipe.set(f"filemap:{filename}", session_id, ex=ttl)
+    else:
+        pipe.persist(f"tokenmap:{session_id}")
+        pipe.set(f"filemap:{filename}", session_id)
     results = pipe.execute()
 
     total_tokens = results[1]
@@ -80,10 +87,11 @@ def store_token_map(
         "timestamp":   str(int(time.time())),
         "token_count": str(total_tokens),
     })
-    pipe2.expire(f"keyref:{session_id}", ttl)
+    if ttl:
+        pipe2.expire(f"keyref:{session_id}", ttl)
+    else:
+        pipe2.persist(f"keyref:{session_id}")
     pipe2.execute()
-
-    pipe.execute()
 
 
 def get_session_id(filename: str, url: str = DEFAULT_REDIS_URL) -> str | None:

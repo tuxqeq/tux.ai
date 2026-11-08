@@ -449,11 +449,11 @@ class HybridDetector:
         ]
 
         anonymizer = AnonymizerEngine()
-        key_b64 = base64.b64encode(aes_key).decode("utf-8")
+        from utils import value_cipher_key
         anonymized = anonymizer.anonymize(
             text=text,
             analyzer_results=presidio_results,
-            operators={"DEFAULT": OperatorConfig("encrypt", {"key": key_b64})},
+            operators={"DEFAULT": OperatorConfig("encrypt", {"key": value_cipher_key(aes_key)})},
         )
         return anonymized.text
 

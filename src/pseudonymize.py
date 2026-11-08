@@ -1,15 +1,12 @@
 import hashlib
 import hmac
-import base64
 import logging
 import os
 import sys
 from typing import Dict, List, Tuple
-from presidio_anonymizer import AnonymizerEngine
-from presidio_anonymizer.entities import OperatorConfig, RecognizerResult
 
 sys.path.insert(0, os.path.dirname(__file__))
-from utils import DetectionResult, merge_overlapping_spans, validate_aes_key
+from utils import DetectionResult, encrypt_value, merge_overlapping_spans, validate_aes_key
 
 log = logging.getLogger("tuxai")
 
@@ -83,6 +80,22 @@ LABEL_NORM: Dict[str, str] = {
 }
 
 
+_POSSESSIVE_ENDINGS = ("'s", "\u2019s", "'S", "\u2019S")
+
+
+def _trim_possessive(text: str, start: int, end: int) -> Tuple[int, int]:
+    """Keep a possessive ending outside the token: "John Smith's" -> [PERSON_x]'s.
+
+    Thesis decision log D-24. The token id is an HMAC of the value (D-20), so "John Smith's" and
+    "John Smith" would get different ids, and a question such as "What is John Smith's SSN?" would
+    not match the records of [PERSON_x] in the RAG token search.
+    """
+    value = text[start:end]
+    if len(value) > 3 and value.endswith(_POSSESSIVE_ENDINGS) and not value[-3].isspace():
+        return start, end - 2
+    return start, end
+
+
 class PIIPseudonymizer:
     """
     Replaces detected PII spans with readable tokens like [PERSON_a1b2c3d4]
@@ -100,8 +113,6 @@ class PIIPseudonymizer:
     def __init__(self, aes_key: bytes) -> None:
         validate_aes_key(aes_key)
         self._aes_key = aes_key
-        self._key_b64 = base64.b64encode(aes_key).decode("utf-8")
-        self._anonymizer = AnonymizerEngine()
         self._value_to_token: Dict[str, str] = {}
         self._token_to_value: Dict[str, str] = {}
         self._token_map: Dict[str, str] = {}
@@ -119,12 +130,7 @@ class PIIPseudonymizer:
         return token
 
     def _encrypt_value(self, value: str) -> str:
-        fake_result = [RecognizerResult(entity_type="PII", start=0, end=len(value), score=1.0)]
-        op_config = {"DEFAULT": OperatorConfig("encrypt", {"key": self._key_b64})}
-        result = self._anonymizer.anonymize(
-            text=value, analyzer_results=fake_result, operators=op_config
-        )
-        return result.text
+        return encrypt_value(self._aes_key, value)
 
     def pseudonymize(
         self, text: str, detections: List[DetectionResult]
@@ -143,14 +149,15 @@ class PIIPseudonymizer:
 
         tokenized = text
         for span in reversed(merged):
-            raw_value = tokenized[span["start"]:span["end"]]
+            start, end = _trim_possessive(tokenized, span["start"], span["end"])
+            raw_value = tokenized[start:end]
             if raw_value not in self._value_to_token:
                 token = self._make_token(span["label"], raw_value)
                 self._value_to_token[raw_value] = token
                 self._token_to_value[token] = raw_value
                 self._token_map[token] = self._encrypt_value(raw_value)
             token = self._value_to_token[raw_value]
-            tokenized = tokenized[: span["start"]] + token + tokenized[span["end"]:]
+            tokenized = tokenized[:start] + token + tokenized[end:]
 
         return tokenized, dict(self._token_map)
 

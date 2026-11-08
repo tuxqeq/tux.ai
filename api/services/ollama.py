@@ -29,6 +29,8 @@ async def stream_chat(
         "messages": messages,
         "stream": True,
     }
+    if settings.OLLAMA_NUM_CTX:
+        payload["options"] = {"num_ctx": settings.OLLAMA_NUM_CTX}
 
     async with httpx.AsyncClient(timeout=120.0) as client:
         async with client.stream("POST", url, json=payload) as response:

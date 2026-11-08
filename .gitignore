@@ -11,6 +11,8 @@ downloads/
 eggs/
 .eggs/
 lib/
+# the Python template rule above also hid the frontend API clients: a fresh clone could not build
+!frontend/src/lib/
 lib64/
 parts/
 sdist/
@@ -122,3 +124,6 @@ dump.rdb
 # that trip GitHub push protection. The per-label CSV summaries are committed.
 eval/results/*.json
 eval/results/*_preds.jsonl
+
+# RAG index (rebuilt by scripts/bootstrap_dataset.py)
+data/chroma/

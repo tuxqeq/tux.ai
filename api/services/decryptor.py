@@ -5,31 +5,21 @@ For each [LABEL_hexid] token in a text chunk:
   - If user has a matching RbacGrant → decrypt from Redis and substitute
   - Otherwise → leave the token unchanged
 
-Decryption uses the same Presidio AnonymizerEngine decrypt path used by the
-existing decrypt_file.py to stay consistent.
+Decryption uses src.utils.decrypt_value, the same cipher rule as the pseudonymizer and
+decrypt_file.py (thesis decision log D-22).
 """
-import base64
 import re
 import uuid
 from typing import Set
 
-from presidio_anonymizer import AnonymizerEngine
-from presidio_anonymizer.entities import OperatorConfig, RecognizerResult
+from src.utils import decrypt_value
 
 _TOKEN_RE = re.compile(r"\[([A-Z_]{1,30})_([0-9a-f]{8,16})\]")  # 8 = old md5 ids, 12 = HMAC ids
 
-_anonymizer = AnonymizerEngine()
 
 
 def _presidio_decrypt(encrypted_value: str, aes_key: bytes) -> str:
-    key_b64 = base64.b64encode(aes_key).decode()
-    fake = [RecognizerResult(entity_type="PII", start=0, end=len(encrypted_value), score=1.0)]
-    result = _anonymizer.anonymize(
-        text=encrypted_value,
-        analyzer_results=fake,
-        operators={"DEFAULT": OperatorConfig("decrypt", {"key": key_b64})},
-    )
-    return result.text
+    return decrypt_value(aes_key, encrypted_value)  # same cipher key rule as the pseudonymizer (D-22)
 
 
 def resolve_tokens(

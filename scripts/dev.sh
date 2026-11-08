@@ -91,8 +91,9 @@ else
 
     echo "[infra] Starting Envoy gRPC-Web proxy on :8080..."
     if command -v envoy &>/dev/null; then
-        ENVOY_YAML="$ROOT/envoy/envoy.local.yaml"
-        [ -f "$ENVOY_YAML" ] || ENVOY_YAML="$ROOT/envoy/envoy.yaml"
+        # native Envoy runs next to the API: host.docker.internal (the Docker case) -> 127.0.0.1
+        ENVOY_YAML="/tmp/envoy.native.yaml"
+        sed 's/host\.docker\.internal/127.0.0.1/' "$ROOT/envoy/envoy.local.yaml" > "$ENVOY_YAML"
         envoy -c "$ENVOY_YAML" --log-level warn &
         echo "  Envoy started."
     else

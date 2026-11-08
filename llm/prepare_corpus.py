@@ -7,6 +7,13 @@ Steps:
   3. Writes tokenized docs to --output-dir
   4. Securely deletes --input-dir (overwrite bytes + unlink + rmtree)
 
+Corpus v2 (2026-11-08, thesis decision log D-22):
+  - the dataset key is a random 32-byte key in --key-file (base64, file mode 600), created on the
+    first run; the old hard-coded default "16ByteSecureKey!" is no longer used
+  - Redis keyref stores a SHA-256 fingerprint of the key, not its first 8 characters
+  - token maps never expire (--ttl-days 0)
+  - the plaintext token map is NOT written to disk unless --export-map is given
+
 Redis is pinged at startup; the script exits if Redis is unreachable.
 """
 
@@ -24,10 +31,33 @@ if _SRC_DIR not in sys.path:
     sys.path.insert(0, _SRC_DIR)
 
 DEFAULT_INPUT_DIR = os.path.join(_REPO_ROOT, "llm", "data", "raw_temp")
-DEFAULT_OUTPUT_DIR = os.path.join(_REPO_ROOT, "llm", "data", "tokenized")
-DEFAULT_AES_KEY = "16ByteSecureKey!"
+DEFAULT_OUTPUT_DIR = os.path.join(_REPO_ROOT, "llm", "data", "tokenized_v2")
+LEGACY_AES_KEY = "16ByteSecureKey!"  # used for the May 2026 corpus; never use again
+DEFAULT_KEY_FILE = os.path.join(_REPO_ROOT, "llm", "data", "dataset_key.b64")
 DEFAULT_MODEL_PATH = os.path.join(_REPO_ROOT, "models", "pii_model_v4")
-DEFAULT_MAP_PATH = os.path.join(_REPO_ROOT, "llm", "data", "token_map.json")
+
+
+
+def load_or_create_key(key_file: str) -> bytes:
+    """Read a base64 AES key from key_file; create a random 32-byte key there if it is missing."""
+    import base64
+    import secrets
+    if os.path.exists(key_file):
+        with open(key_file) as f:
+            return base64.b64decode(f.read().strip())
+    os.makedirs(os.path.dirname(os.path.abspath(key_file)), exist_ok=True)
+    key = secrets.token_bytes(32)
+    fd = os.open(key_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(base64.b64encode(key).decode())
+    print(f"Created a new random dataset key: {key_file} (mode 600). Keep it secret; "
+          f"scripts/bootstrap_dataset.py stores it wrapped with MASTER_KEY.")
+    return key
+
+
+def key_fingerprint(key: bytes) -> str:
+    import hashlib
+    return hashlib.sha256(b"tux.ai/key-ref|" + key).hexdigest()[:16]
 
 
 def _secure_delete(path: str) -> None:
@@ -66,8 +96,12 @@ def main() -> None:
                         help=f"Directory of raw .txt files (default: {DEFAULT_INPUT_DIR})")
     parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR,
                         help=f"Directory for tokenized .txt files (default: {DEFAULT_OUTPUT_DIR})")
-    parser.add_argument("--key", default=DEFAULT_AES_KEY,
-                        help="AES key string — must be 16, 24, or 32 bytes")
+    parser.add_argument("--key", default=None,
+                        help="[legacy] AES key string (16/24/32 bytes). Prefer --key-file.")
+    parser.add_argument("--key-file", default=DEFAULT_KEY_FILE,
+                        help="base64 dataset key; created with a random 32-byte key if missing")
+    parser.add_argument("--ttl-days", type=int, default=0,
+                        help="expiry of the Redis token maps in days (0 = never expire)")
     parser.add_argument("--model-path", default=DEFAULT_MODEL_PATH,
                         help="Path to HybridDetector AI model")
     parser.add_argument("--no-ai", action="store_true",
@@ -78,8 +112,8 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=42, help="Unused; reserved for compatibility")
     parser.add_argument("--keep-raw", action="store_true",
                         help="[DEBUG ONLY] Skip secure deletion of raw files. WARNING: raw PII will remain on disk.")
-    parser.add_argument("--export-map", default=DEFAULT_MAP_PATH,
-                        help=f"Path to write token→plaintext JSON map (default: {DEFAULT_MAP_PATH}). Pass empty string to skip.")
+    parser.add_argument("--export-map", default="",
+                        help="[DEBUG ONLY] write the token→PLAINTEXT map to this JSON path (default: off)")
     args = parser.parse_args()
 
     if args.keep_raw:
@@ -89,7 +123,13 @@ def main() -> None:
             stacklevel=1,
         )
 
-    aes_key = args.key.encode("utf-8")
+    if args.key is not None:
+        if args.key == LEGACY_AES_KEY:
+            print("ERROR: the legacy default key must not be used for a new corpus.")
+            sys.exit(1)
+        aes_key = args.key.encode("utf-8")
+    else:
+        aes_key = load_or_create_key(args.key_file)
     if len(aes_key) not in (16, 24, 32):
         print(f"ERROR: AES key must be 16, 24, or 32 bytes; got {len(aes_key)}")
         sys.exit(1)
@@ -178,8 +218,9 @@ def main() -> None:
                     token_map=encrypted_map,
                     session_id=session_id,
                     filename=fname,
-                    key_id=args.key[:8],
+                    key_id=key_fingerprint(aes_key),
                     url=redis_url,
+                    ttl=args.ttl_days * 86400 or None,
                 )
 
             print(f"  [OK] {fname}  ({len(plaintext_map)} PII tokens replaced)")
@@ -211,10 +252,16 @@ def main() -> None:
         with open(map_path, "w", encoding="utf-8") as f:
             json.dump(master_token_map, f, indent=2, ensure_ascii=False)
         print(f"\nToken map ({len(master_token_map)} entries) saved to: {map_path}")
-        print(f"  AES key used: {args.key!r}")
+        print(f"  Key fingerprint: {key_fingerprint(aes_key)}")
         print("  Use this map to decode model outputs: token -> original value")
 
     # --- Secure deletion ---
+    if failed:
+        # Before 2026-11-08 the raw files were deleted even when files failed, so a crash in
+        # tokenization (e.g. a 32-byte key, D-22) lost the input. Keep it and stop instead.
+        print(f"\nERROR: {failed} file(s) failed. Raw input is KEPT in {args.input_dir}; "
+              "fix the error and run again.")
+        sys.exit(1)
     if args.keep_raw:
         print(f"\n[DEBUG] --keep-raw set: skipping deletion of {args.input_dir}")
     else:

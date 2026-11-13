@@ -138,12 +138,45 @@ async def run():
     async with AsyncSessionLocal() as db:
         stored = [m.content for m in (await db.execute(select(M.Message).order_by(M.Message.created_at))).scalars()]
     assert stored == [qtok, f"The SSN of the person is {ssn_tok}."], stored   # DB keeps tokens only
-    # a dataset WITHOUT an index: no RAG system message
+    # D-29: the session title is the TOKENIZED question; the history endpoint resolves tokens (RBAC)
+    from api.routers import chats as chats_router
     async with AsyncSessionLocal() as db:
-        ds2 = M.Dataset(name="no index"); db.add(ds2); await db.commit(); ds2_id = ds2.id
+        sess = (await db.execute(select(M.ChatSession).where(M.ChatSession.dataset_id == ds_id))).scalars().first()
+        assert sess.title == qtok[:60] and name not in sess.title, sess.title
+        detail = await chats_router.get_session(sess.id, db, admin)
+        texts = [m.content for m in detail.messages]
+        ssn_plain = re.search(r"SSN: (\d{3}-\d{2}-\d{4})", open(f"{raw_dir}/{stem}.txt").read()).group(1)
+        assert texts[0] == q and texts[1] == f"The SSN of the person is {ssn_plain}.", texts
+        n_audit = len((await db.execute(select(M.AuditLog))).scalars().all())
+        assert n_audit >= 2, n_audit   # decryptions of the history view are audit-logged
+    # no dataset -> refused (it could not be tokenized); dataset without a key -> refused
+    class ReqNoDs(Req): dataset_id = ""
+    try:
+        _ = [c async for c in CS.ChatServicer().StreamChat(ReqNoDs(), Ctx())]
+        raise AssertionError("chat without a dataset accepted")
+    except RuntimeError as e:
+        assert "Select a dataset" in str(e), e
+    async with AsyncSessionLocal() as db:
+        ds_nokey = M.Dataset(name="no key"); db.add(ds_nokey); await db.commit(); nokey_id = ds_nokey.id
+    class ReqNoKey(Req): dataset_id = str(nokey_id)
+    try:
+        _ = [c async for c in CS.ChatServicer().StreamChat(ReqNoKey(), Ctx())]
+        raise AssertionError("chat on a dataset without a key accepted")
+    except RuntimeError as e:
+        assert "no key" in str(e), e
+    # a dataset WITH a key but WITHOUT an index: chat works, no RAG system message
+    from api.security import encrypt_aes_key, key_ref
+    async with AsyncSessionLocal() as db:
+        ds2 = M.Dataset(name="no index"); db.add(ds2); await db.flush()
+        db.add(M.EncryptionKey(dataset_id=ds2.id, encrypted_key=encrypt_aes_key(key), key_ref=key_ref(key)))
+        await db.commit(); ds2_id = ds2.id
     class Req2(Req): dataset_id = str(ds2_id)
     _ = [c async for c in CS.ChatServicer().StreamChat(Req2(), Ctx())]
     assert all(m["role"] != "system" for m in captured["messages"]), captured["messages"]
+    from api.routers import datasets as ds_router
+    async with AsyncSessionLocal() as db:
+        listed = {d.name for d in await ds_router.list_chat_datasets(db, admin)}
+    assert "no index" in listed and "no key" not in listed, listed
     print("chat wiring: ok (system prompt with the token-matched record, tokens only in LLM input and DB)")
     # pod restart: PostgreSQL is empty, Redis / corpus / index are kept -> the same id is re-created
     async with AsyncSessionLocal() as db:

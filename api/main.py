@@ -14,7 +14,7 @@ from slowapi.errors import RateLimitExceeded
 
 from api.config import get_settings
 from api.limiter import limiter
-from api.routers import admin, auth, chats
+from api.routers import admin, auth, chats, datasets
 
 logger = logging.getLogger("tuxai")
 
@@ -72,6 +72,7 @@ async def csrf_protect(request: Request, call_next) -> Response:
 app.include_router(auth.router)
 app.include_router(admin.router)
 app.include_router(chats.router)
+app.include_router(datasets.router)
 
 
 @app.get("/api/health")
@@ -98,6 +99,9 @@ async def start_grpc():
         )
     else:
         logger.info("PII detector: hybrid (%s)", mode["pii_model"])
+    # Load the detector and the RAG embedding model in the background. Loaded lazily, they made the
+    # first chat after a start take > 120 s on the pod (network volume) and Envoy answered 504.
+    asyncio.get_event_loop().run_in_executor(None, _warm_up)
     try:
         from api.grpc.chat_servicer import create_grpc_server
         _grpc_server = create_grpc_server(settings.GRPC_PORT)
@@ -105,6 +109,20 @@ async def start_grpc():
         logger.info("gRPC server started on port %d", settings.GRPC_PORT)
     except Exception as exc:
         logger.warning("gRPC server could not start: %s", exc)
+
+
+def _warm_up() -> None:
+    import time
+    t = time.time()
+    try:
+        from api.services.tokenizer import get_detector
+        get_detector(settings.MODEL_PATH).detect("Warm-up text for John Smith.")
+        if settings.RAG_ENABLED:
+            from api.services import rag
+            rag.get_retriever()._get_client()
+        logger.info("Warm-up done in %.1f s", time.time() - t)
+    except Exception:
+        logger.exception("Warm-up failed (the first chat will load the models instead)")
 
 
 @app.on_event("shutdown")

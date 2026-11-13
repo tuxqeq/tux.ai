@@ -149,21 +149,31 @@ class Retriever:
             col.upsert(ids=[d[0] for d in b], documents=[d[1] for d in b], metadatas=[d[2] for d in b])
         return {"records": len(records), "chunks": len(docs) - len(records), "collection": col.count()}
 
-    def retrieve(self, dataset_id, query: str, k: int = 3) -> List[Dict]:
-        """Return up to k whole records: [{"id", "text", "match": "token"|"semantic", "score"}]."""
+    def retrieve(self, dataset_id, query: str, k: int = 3, context: str = "") -> List[Dict]:
+        """Return up to k whole records: [{"id", "text", "match": "token"|"semantic", "score"}].
+
+        context: earlier turns of the chat (tokenized). Their token ids also select records, ranked
+        below the ids of the question itself, so a follow-up such as "And her date of birth?"
+        still finds the record of the person asked about before (D-29).
+        """
         if not query or not query.strip() or k <= 0:
             return []
         col = self.collection(dataset_id)
         if col is None or col.count() == 0:
             return []
         out: List[Dict] = []
-        ids = token_ids(query)
+        q_ids = token_ids(query)
+        c_ids = [t for t in token_ids(context) if t not in q_ids]
+        ids = q_ids + c_ids
         if ids:
             where_doc = {"$contains": ids[0]} if len(ids) == 1 else {"$or": [{"$contains": t} for t in ids]}
             got = col.get(where={"kind": "record"}, where_document=where_doc, include=["documents"])
-            hits = sorted(zip(got["ids"], got["documents"]), key=lambda x: (-sum(t in x[1] for t in ids), x[0]))
-            out = [{"id": i, "text": d, "match": "token", "score": float(sum(t in d for t in ids))}
-                   for i, d in hits[:k]]
+
+            def score(doc: str) -> float:
+                return 10.0 * sum(t in doc for t in q_ids) + sum(t in doc for t in c_ids)
+
+            hits = sorted(zip(got["ids"], got["documents"]), key=lambda x: (-score(x[1]), x[0]))
+            out = [{"id": i, "text": d, "match": "token", "score": score(d)} for i, d in hits[:k]]
         if len(out) < k:
             seen = {r["id"] for r in out}
             res = col.query(query_texts=[query], n_results=min(4 * k + len(seen), col.count()),
@@ -203,14 +213,14 @@ def get_retriever() -> Retriever:
         return _default
 
 
-def context_for_chat(dataset_id, query: str, k: int = 3) -> Optional[List[Dict]]:
+def context_for_chat(dataset_id, query: str, k: int = 3, context: str = "") -> Optional[List[Dict]]:
     """Chat path helper. None = this dataset has no RAG index (chat runs without RAG);
     a list (possibly empty) = records to put in the system prompt. Never raises."""
     try:
         r = get_retriever()
         if not r.has_index(dataset_id):
             return None
-        return r.retrieve(dataset_id, query, k)
+        return r.retrieve(dataset_id, query, k, context)
     except Exception:
         import logging
         logging.getLogger("tuxai").exception("RAG retrieval failed")

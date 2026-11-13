@@ -73,3 +73,12 @@ real = rag.records_from_dir(synthetic_raw_docs(3))   # generate_synthetic_docs o
 assert len(real) == 3 and all("Record:" in r["text"] for r in real), [r["text"][:30] for r in real]
 secs = rag.split_sections(real[0]["text"]); print("real record:", len(real[0]["text"]), "chars,", len(secs), "sections")
 print("rag retriever: ok")
+# D-29: a follow-up without a token finds the record of the person from the earlier turns,
+# and a token in the question itself still ranks first
+R2 = rag.Retriever(tempfile.mkdtemp(), embedding_function=FakeEF())
+R2.add_records(ds, [{"id": f"doc{i}", "text": t, "metadata": {"source": f"doc{i}"}} for i, t in enumerate(recs)])
+f1 = R2.retrieve(ds, "And what is her email?", k=1, context="What is the SSN of [PERSON_aaaaaaaaaaaa]?\n[SSN_111111111111]")
+assert f1[0]["id"] == "doc0" and f1[0]["match"] == "token", f1
+f2 = R2.retrieve(ds, "Now the SSN of [PERSON_bbbbbbbbbbbb]?", k=2, context="earlier: [PERSON_aaaaaaaaaaaa]")
+assert [x["id"] for x in f2] == ["doc1", "doc0"], f2
+print("rag follow-up context: ok")

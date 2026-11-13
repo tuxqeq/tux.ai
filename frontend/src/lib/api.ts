@@ -38,6 +38,12 @@ export interface Dataset {
   rdb_imported: boolean;
 }
 
+export interface ChatDataset {
+  id: string;
+  name: string;
+  description: string | null;
+}
+
 export interface AdminUser {
   id: string;
   email: string;
@@ -118,6 +124,12 @@ export const chats = {
   list: () => request<ChatSession[]>("GET", "/api/chats"),
   get: (id: string) => request<SessionDetail>("GET", `/api/chats/${id}`),
   delete: (id: string) => request<void>("DELETE", `/api/chats/${id}`),
+};
+
+// ── Datasets a user can chat with ──────────────────────────────────────────────
+
+export const datasets = {
+  list: () => request<ChatDataset[]>("GET", "/api/datasets"),
 };
 
 // ── Admin ──────────────────────────────────────────────────────────────────────

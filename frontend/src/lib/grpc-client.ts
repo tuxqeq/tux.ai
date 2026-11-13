@@ -66,11 +66,12 @@ function encodeChatRequest(params: {
   return out;
 }
 
-function decodeChatChunk(bytes: Uint8Array): { content: string; done: boolean; error: string } {
+function decodeChatChunk(bytes: Uint8Array): { content: string; done: boolean; error: string; sessionId: string } {
   let pos = 0;
   let content = "";
   let done = false;
   let error = "";
+  let sessionId = "";
   const dec = new TextDecoder();
 
   while (pos < bytes.length) {
@@ -86,6 +87,7 @@ function decodeChatChunk(bytes: Uint8Array): { content: string; done: boolean; e
       pos += len;
       if (fieldNumber === 1) content = dec.decode(slice);
       if (fieldNumber === 3) error = dec.decode(slice);
+      if (fieldNumber === 4) sessionId = dec.decode(slice);
     } else if (wireType === 0) {
       let val: number;
       [val, pos] = readVarint(bytes, pos);
@@ -98,7 +100,7 @@ function decodeChatChunk(bytes: Uint8Array): { content: string; done: boolean; e
       break; // unknown wire type: stop instead of looping on garbage
     }
   }
-  return { content, done, error };
+  return { content, done, error, sessionId };
 }
 
 // ── gRPC-Web stream using fetch (works without protoc-gen stubs) ───────────────
@@ -147,10 +149,18 @@ export function streamChat(params: ChatStreamParams): () => void {
         signal: controller.signal,
       });
 
+      // A call that fails before any message (e.g. "Select a dataset") is a trailers-only
+      // response: the gRPC status is in the HTTP headers.
+      const headerStatus = res.headers.get("grpc-status");
+      if (headerStatus && headerStatus !== "0") {
+        params.onError(decodeURIComponent(res.headers.get("grpc-message") ?? `gRPC status ${headerStatus}`));
+        return;
+      }
       if (!res.ok || !res.body) {
         params.onError(`HTTP ${res.status}`);
         return;
       }
+      let sessionId = "";
 
       const reader = res.body.getReader();
       let buffer = new Uint8Array(0);
@@ -175,12 +185,20 @@ export function streamChat(params: ChatStreamParams): () => void {
           buffer = buffer.slice(5 + frameLen);
 
           if (frameType === 0x80) {
-            // Trailers frame — stream complete
-            params.onDone();
+            // Trailers frame — stream complete; a non-zero grpc-status is an error (e.g. an abort)
+            const trailers = new TextDecoder().decode(frameBody);
+            const status = /grpc-status:\s*(\d+)/i.exec(trailers)?.[1] ?? "0";
+            if (status !== "0") {
+              const msg = /grpc-message:\s*([^\r\n]*)/i.exec(trailers)?.[1] ?? "";
+              params.onError(decodeURIComponent(msg) || `gRPC status ${status}`);
+              return;
+            }
+            params.onDone(sessionId || undefined);
             return;
           }
 
           const chunk = decodeChatChunk(frameBody);
+          if (chunk.sessionId) sessionId = chunk.sessionId;
           if (chunk.error) {
             params.onError(chunk.error);
             return;
@@ -189,12 +207,12 @@ export function streamChat(params: ChatStreamParams): () => void {
             params.onChunk(chunk.content);
           }
           if (chunk.done) {
-            params.onDone();
+            params.onDone(sessionId || undefined);
             return;
           }
         }
       }
-      params.onDone();
+      params.onDone(sessionId || undefined);
     } catch (err) {
       if ((err as Error).name !== "AbortError") {
         params.onError(String(err));

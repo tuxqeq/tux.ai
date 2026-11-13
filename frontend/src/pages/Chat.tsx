@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Sidebar } from "@/components/Sidebar";
 import { ChatMessage } from "@/components/ChatMessage";
 import { useChat } from "@/hooks/useChat";
-import { chats, type User, type Message } from "@/lib/api";
+import { chats, datasets, type ChatDataset, type User, type Message } from "@/lib/api";
 
 interface Props {
   user: User;
@@ -17,16 +17,35 @@ const ROLE_STYLE: Record<string, string> = {
 
 export function Chat({ user, onLogout }: Readonly<Props>) {
   const [sessionId, setSessionId] = useState<string>("");
-  const [datasetId] = useState<string>("");
+  // D-29: the page had no dataset selector (datasetId was always ""), so UI chats were never
+  // tokenized and never used RAG. A new chat now needs a dataset; an existing chat keeps its own.
+  const [datasetId, setDatasetId] = useState<string>("");
+  const [datasetList, setDatasetList] = useState<ChatDataset[]>([]);
   const [historicMessages, setHistoricMessages] = useState<Message[]>([]);
+  const createdRef = useRef<string>("");
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const [input, setInput] = useState("");
 
+  useEffect(() => {
+    datasets
+      .list()
+      .then((ds) => {
+        setDatasetList(ds);
+        setDatasetId((cur) => cur || ds[0]?.id || "");
+      })
+      .catch(() => setDatasetList([]));
+  }, []);
+
+  const onSessionCreated = useCallback((id: string) => {
+    createdRef.current = id; // the live messages of this chat are already on screen
+    setSessionId(id);
+  }, []);
+
   const { messages, setMessages, streaming, error, send } = useChat({
     sessionId,
     datasetId,
-    onSessionCreated: setSessionId,
+    onSessionCreated,
   });
 
   useEffect(() => {
@@ -34,8 +53,15 @@ export function Chat({ user, onLogout }: Readonly<Props>) {
       setHistoricMessages([]);
       return;
     }
-    chats.get(sessionId).then((s) => setHistoricMessages(s.messages));
+    if (createdRef.current === sessionId) return;
+    chats.get(sessionId).then((s) => {
+      setHistoricMessages(s.messages);
+      if (s.dataset_id) setDatasetId(s.dataset_id);
+    });
   }, [sessionId]);
+
+  const datasetName = datasetList.find((d) => d.id === datasetId)?.name;
+  const canSend = Boolean(sessionId || datasetId);
 
   const allMessages = [...historicMessages, ...messages];
 
@@ -44,21 +70,25 @@ export function Chat({ user, onLogout }: Readonly<Props>) {
   }, [allMessages.length, messages]);
 
   const handleNew = useCallback(() => {
+    createdRef.current = "";
     setSessionId("");
     setHistoricMessages([]);
     setMessages([]);
-  }, [setMessages]);
+    setDatasetId((cur) => cur || datasetList[0]?.id || "");
+  }, [setMessages, datasetList]);
 
   const handleSelect = useCallback(
     (id: string) => {
+      if (id === sessionId) return;
+      createdRef.current = "";
       setSessionId(id);
       setMessages([]);
     },
-    [setMessages]
+    [setMessages, sessionId]
   );
 
   const handleSend = () => {
-    if (!input.trim()) return;
+    if (!input.trim() || !canSend) return;
     send(input);
     setInput("");
   };
@@ -77,9 +107,28 @@ export function Chat({ user, onLogout }: Readonly<Props>) {
       <div className="flex flex-1 flex-col overflow-hidden">
         {/* Header */}
         <header className="flex h-13 shrink-0 items-center justify-between border-b border-white/6 px-5">
-          <span className="text-sm font-medium text-white/25">
-            {sessionId ? "Chat" : "tux​.ai"}
-          </span>
+          {sessionId ? (
+            <span className="text-sm font-medium text-white/40">
+              Dataset: <span className="text-white/70">{datasetName ?? "unknown"}</span>
+            </span>
+          ) : datasetList.length > 0 ? (
+            <label className="flex items-center gap-2 text-sm text-white/40">
+              Dataset
+              <select
+                value={datasetId}
+                onChange={(e) => setDatasetId(e.target.value)}
+                className="rounded-md border border-white/10 bg-surface-raised px-2 py-1 text-sm text-white/80 outline-none"
+              >
+                {datasetList.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : (
+            <span className="text-sm font-medium text-white/40">No dataset available — ask an admin</span>
+          )}
           <div className="flex items-center gap-1.5">
             <span
               className={`rounded-md px-2 py-0.5 text-xs font-medium ${ROLE_STYLE[user.role] ?? "text-white/40 bg-white/6"}`}
@@ -166,7 +215,7 @@ export function Chat({ user, onLogout }: Readonly<Props>) {
               />
               <button
                 onClick={handleSend}
-                disabled={!input.trim() || streaming}
+                disabled={!input.trim() || streaming || !canSend}
                 className="mb-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-accent text-black/70 transition-all hover:bg-accent-hover disabled:opacity-30"
                 title="Send"
               >

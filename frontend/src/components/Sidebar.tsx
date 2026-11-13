@@ -87,7 +87,7 @@ export function Sidebar({ activeId, onSelect, onNew }: Readonly<Props>) {
               <span className="absolute left-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-r-full bg-accent" />
             )}
             <div className="min-w-0 flex-1">
-              <p className="truncate text-sm">{s.title ?? "New chat"}</p>
+              <p className="truncate text-sm">{(s.title ?? "New chat").replace(/\[([A-Z_]{1,30})_[0-9a-f]{8,16}\]/g, "‹$1›")}</p>
               <p className="mt-0.5 text-xs opacity-40">{formatDate(s.updated_at)}</p>
             </div>
             <button

@@ -126,12 +126,19 @@ class ChatServicer:
                 await context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Invalid UUID")
                 return
 
-            # Create new session if needed
+            # Create new session if needed. A chat needs a dataset: without its key nothing can be
+            # tokenized, and the question would reach the model and the database in plaintext
+            # (D-29: the web UI had no dataset selector, so every UI chat ran this way).
+            if not session_id and not dataset_id:
+                await context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Select a dataset for this chat")
+                return
             if not session_id:
                 session = ChatSession(
                     user_id=user.id,
                     dataset_id=dataset_id,
-                    title=request.message[:60] or "New chat",
+                    # set from the TOKENIZED question below; the raw question used to be stored
+                    # here, i.e. plaintext PII in chat_sessions.title (D-29)
+                    title="New chat",
                 )
                 db.add(session)
                 await db.flush()
@@ -147,12 +154,21 @@ class ChatServicer:
                 if not session:
                     await context.abort(grpc.StatusCode.NOT_FOUND, "Session not found")
                     return
+                if not session.dataset_id:
+                    await context.abort(grpc.StatusCode.FAILED_PRECONDITION,
+                                        "This chat has no dataset; start a new chat")
+                    return
+                dataset_id = session.dataset_id  # a session stays bound to its dataset
 
             # Load AES key + dataset model name
             aes_key: bytes | None = None
             dataset_model: str | None = None
             if dataset_id:
                 aes_key = await _get_aes_key(dataset_id, db)
+                if not aes_key:
+                    await context.abort(grpc.StatusCode.FAILED_PRECONDITION,
+                                        "This dataset has no key; nothing could be tokenized")
+                    return
                 ds_result = await db.execute(
                     select(Dataset).where(Dataset.id == dataset_id)
                 )
@@ -182,6 +198,9 @@ class ChatServicer:
                         url=settings.REDIS_URL,
                     )
 
+            if request.chat_session_id == "" and user_content.strip():
+                session.title = user_content.strip()[:60]
+
             # Persist user message (tokenized)
             db.add(Message(session_id=session_id, role="user", content=user_content))
             await db.commit()
@@ -193,8 +212,10 @@ class ChatServicer:
             # question go into a system message. None = the dataset has no index (no RAG).
             if dataset_id and settings.RAG_ENABLED:
                 from api.services import rag
+                # earlier turns (tokenized) let a follow-up question find the same person's record
+                recent = "\n".join(m["content"] for m in history[-7:-1])
                 records = await asyncio.get_event_loop().run_in_executor(
-                    None, rag.context_for_chat, dataset_id, user_content, settings.RAG_TOP_K
+                    None, rag.context_for_chat, dataset_id, user_content, settings.RAG_TOP_K, recent
                 )
                 if records is not None:
                     logger.info("RAG dataset=%s records=%s", dataset_id,
@@ -253,7 +274,7 @@ class ChatServicer:
                 await db.commit()
 
             if chat_pb2:
-                yield chat_pb2.ChatChunk(content="", done=True)
+                yield chat_pb2.ChatChunk(content="", done=True, session_id=str(session_id))
 
 
 def create_grpc_server(port: int):

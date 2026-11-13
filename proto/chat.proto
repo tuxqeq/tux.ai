@@ -22,4 +22,5 @@ message ChatChunk {
     string content = 1;
     bool   done    = 2;
     string error   = 3;  // non-empty only on terminal error
+    string session_id = 4;  // set on the terminal chunk, so the client can continue the chat
 }

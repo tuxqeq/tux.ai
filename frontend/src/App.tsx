@@ -4,6 +4,7 @@ import { auth, type User } from "@/lib/api";
 import { Login } from "@/pages/Login";
 import { Chat } from "@/pages/Chat";
 import { Admin } from "@/pages/Admin";
+import { Wordmark } from "@/components/Wordmark";
 
 function useAuth() {
   const [user, setUser] = useState<User | null | "loading">("loading");
@@ -29,8 +30,10 @@ export default function App() {
 
   if (user === "loading") {
     return (
-      <div className="flex h-screen items-center justify-center bg-surface">
-        <div className="h-6 w-6 animate-spin rounded-full border-2 border-accent border-t-transparent" />
+      <div className="flex h-dvh flex-col items-center justify-center gap-5 bg-paper" role="status">
+        <Wordmark size="lg" />
+        <div className="ghost-line w-28" aria-hidden />
+        <span className="sr-only">Loading</span>
       </div>
     );
   }
@@ -45,9 +48,7 @@ export default function App() {
         <Route path="/" element={<Chat user={user} onLogout={handleLogout} />} />
         <Route
           path="/admin"
-          element={
-            user.role === "admin" ? <Admin /> : <Navigate to="/" replace />
-          }
+          element={user.role === "admin" ? <Admin /> : <Navigate to="/" replace />}
         />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

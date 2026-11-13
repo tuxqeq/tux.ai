@@ -1,240 +1,265 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Sidebar } from "@/components/Sidebar";
 import { ChatMessage } from "@/components/ChatMessage";
+import { Composer, type ComposerHandle } from "@/components/Composer";
+import { DatasetPicker } from "@/components/DatasetPicker";
+import { Redaction } from "@/components/Redaction";
 import { useChat } from "@/hooks/useChat";
-import { chats, datasets, type ChatDataset, type User, type Message } from "@/lib/api";
+import { chats, datasets, type ChatDataset, type Message, type User } from "@/lib/api";
 
 interface Props {
   user: User;
   onLogout: () => void;
 }
 
-const ROLE_STYLE: Record<string, string> = {
-  admin: "text-rose-400 bg-rose-400/10",
-  analyst: "text-amber-400 bg-amber-400/10",
-  viewer: "text-emerald-400 bg-emerald-400/10",
-};
+const LAST_DATASET = "tux.lastDataset";
+
+function readLastDataset(): string {
+  try {
+    return localStorage.getItem(LAST_DATASET) ?? "";
+  } catch {
+    return "";
+  }
+}
 
 export function Chat({ user, onLogout }: Readonly<Props>) {
-  const [sessionId, setSessionId] = useState<string>("");
-  // D-29: the page had no dataset selector (datasetId was always ""), so UI chats were never
-  // tokenized and never used RAG. A new chat now needs a dataset; an existing chat keeps its own.
-  const [datasetId, setDatasetId] = useState<string>("");
-  const [datasetList, setDatasetList] = useState<ChatDataset[]>([]);
-  const [historicMessages, setHistoricMessages] = useState<Message[]>([]);
-  const createdRef = useRef<string>("");
-  const bottomRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
-  const [input, setInput] = useState("");
+  const [sessionId, setSessionId] = useState("");
+  // D-29: a new chat needs a dataset (otherwise nothing is tokenized and RAG is off);
+  // an existing chat keeps the dataset it was started with.
+  const [datasetId, setDatasetId] = useState(readLastDataset);
+  // dataset of the open chat (a chat stays bound to the dataset it started with)
+  const [boundDatasetId, setBoundDatasetId] = useState("");
+  const [options, setOptions] = useState<ChatDataset[] | null>(null);
+  const [history, setHistory] = useState<Message[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
-  useEffect(() => {
-    datasets
-      .list()
-      .then((ds) => {
-        setDatasetList(ds);
-        setDatasetId((cur) => cur || ds[0]?.id || "");
-      })
-      .catch(() => setDatasetList([]));
-  }, []);
+  // a session that the live stream created: its messages are already on screen
+  const createdHere = useRef<string | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const composerRef = useRef<ComposerHandle>(null);
+  const stickToBottom = useRef(true);
 
+  const datasetRef = useRef(datasetId);
+  datasetRef.current = datasetId;
   const onSessionCreated = useCallback((id: string) => {
-    createdRef.current = id; // the live messages of this chat are already on screen
+    createdHere.current = id;
+    setBoundDatasetId(datasetRef.current);
     setSessionId(id);
   }, []);
+  const onAnswerDone = useCallback(() => setRefreshKey((k) => k + 1), []);
 
-  const { messages, setMessages, streaming, error, send } = useChat({
+  const { messages, setMessages, streaming, error, send, stop } = useChat({
     sessionId,
     datasetId,
     onSessionCreated,
+    onAnswerDone,
   });
 
+  // datasets the user can chat with
   useEffect(() => {
-    if (!sessionId) {
-      setHistoricMessages([]);
-      return;
+    datasets
+      .list()
+      .then((list) => {
+        setOptions(list);
+        setDatasetId((cur) => (list.some((d) => d.id === cur) ? cur : list[0]?.id ?? ""));
+      })
+      .catch(() => setOptions([]));
+  }, []);
+
+  useEffect(() => {
+    try {
+      if (datasetId) localStorage.setItem(LAST_DATASET, datasetId);
+    } catch {
+      /* storage can be blocked; the choice then lasts for this visit only */
     }
-    if (createdRef.current === sessionId) return;
-    chats.get(sessionId).then((s) => {
-      setHistoricMessages(s.messages);
-      if (s.dataset_id) setDatasetId(s.dataset_id);
-    });
+  }, [datasetId]);
+
+  // history of a chat picked in the sidebar
+  useEffect(() => {
+    if (!sessionId || sessionId === createdHere.current) return;
+    let cancelled = false;
+    setHistoryLoading(true);
+    chats
+      .get(sessionId)
+      .then((s) => {
+        if (cancelled) return;
+        setHistory(s.messages);
+        setBoundDatasetId(s.dataset_id ?? "");
+        if (s.dataset_id) setDatasetId(s.dataset_id);
+      })
+      .catch(() => !cancelled && setHistory([]))
+      .finally(() => !cancelled && setHistoryLoading(false));
+    return () => {
+      cancelled = true;
+    };
   }, [sessionId]);
 
-  const datasetName = datasetList.find((d) => d.id === datasetId)?.name;
-  const canSend = Boolean(sessionId || datasetId);
+  const all = [...history, ...messages];
+  const liveFrom = history.length;
 
-  const allMessages = [...historicMessages, ...messages];
+  // follow the answer while it streams, unless the reader scrolled up
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (el && stickToBottom.current) el.scrollTop = el.scrollHeight;
+  }, [all.length, messages]);
 
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [allMessages.length, messages]);
+  const onScroll = () => {
+    const el = scrollRef.current;
+    if (el) stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  };
 
-  const handleNew = useCallback(() => {
-    createdRef.current = "";
+  const startNew = useCallback(() => {
+    stop();
+    createdHere.current = null;
     setSessionId("");
-    setHistoricMessages([]);
+    setHistory([]);
     setMessages([]);
-    setDatasetId((cur) => cur || datasetList[0]?.id || "");
-  }, [setMessages, datasetList]);
+    setDrawerOpen(false);
+    composerRef.current?.focus();
+  }, [setMessages, stop]);
 
-  const handleSelect = useCallback(
+  const select = useCallback(
     (id: string) => {
       if (id === sessionId) return;
-      createdRef.current = "";
-      setSessionId(id);
+      stop();
+      createdHere.current = null;
       setMessages([]);
+      setHistory([]);
+      setSessionId(id);
     },
-    [setMessages, sessionId]
+    [sessionId, setMessages, stop],
   );
 
-  const handleSend = () => {
-    if (!input.trim() || !canSend) return;
-    send(input);
-    setInput("");
+  const handleSend = (text: string) => {
+    stickToBottom.current = true;
+    send(text);
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
-    }
-  };
+  const datasetName = options?.find((d) => d.id === datasetId)?.name;
+  const empty = all.length === 0 && !historyLoading;
 
   return (
-    <div className="flex h-screen overflow-hidden bg-surface">
-      <Sidebar activeId={sessionId || null} onSelect={handleSelect} onNew={handleNew} />
+    <div className="flex h-dvh overflow-hidden bg-paper">
+      <Sidebar
+        user={user}
+        activeId={sessionId || null}
+        refreshKey={refreshKey}
+        open={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        onSelect={select}
+        onNew={startNew}
+        onLogout={onLogout}
+      />
 
-      <div className="flex flex-1 flex-col overflow-hidden">
-        {/* Header */}
-        <header className="flex h-13 shrink-0 items-center justify-between border-b border-white/6 px-5">
-          {sessionId ? (
-            <span className="text-sm font-medium text-white/40">
-              Dataset: <span className="text-white/70">{datasetName ?? "unknown"}</span>
-            </span>
-          ) : datasetList.length > 0 ? (
-            <label className="flex items-center gap-2 text-sm text-white/40">
-              Dataset
-              <select
-                value={datasetId}
-                onChange={(e) => setDatasetId(e.target.value)}
-                className="rounded-md border border-white/10 bg-surface-raised px-2 py-1 text-sm text-white/80 outline-none"
-              >
-                {datasetList.map((d) => (
-                  <option key={d.id} value={d.id}>
-                    {d.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-          ) : (
-            <span className="text-sm font-medium text-white/40">No dataset available — ask an admin</span>
-          )}
-          <div className="flex items-center gap-1.5">
-            <span
-              className={`rounded-md px-2 py-0.5 text-xs font-medium ${ROLE_STYLE[user.role] ?? "text-white/40 bg-white/6"}`}
-            >
-              {user.role}
-            </span>
-            <span className="text-xs text-white/20">{user.email}</span>
-            {user.role === "admin" && (
-              <a
-                href="/admin"
-                className="ml-1 rounded-md px-2 py-1 text-xs text-white/30 transition-colors hover:bg-white/6 hover:text-white/60"
-              >
-                Admin
-              </a>
-            )}
-            <button
-              onClick={onLogout}
-              className="rounded-md px-2 py-1 text-xs text-white/30 transition-colors hover:bg-white/6 hover:text-white/60"
-            >
-              Sign out
-            </button>
-          </div>
+      <main className="flex min-w-0 flex-1 flex-col bg-sheet">
+        <header className="flex h-14 shrink-0 items-center gap-3 border-b border-rule px-4 sm:px-6">
+          <button
+            onClick={() => setDrawerOpen(true)}
+            className="btn-quiet -ml-1 md:hidden"
+            aria-label="Open chats"
+          >
+            <svg viewBox="0 0 16 16" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={1.6} aria-hidden>
+              <path d="M2 4h12M2 8h12M2 12h8" />
+            </svg>
+          </button>
+          <DatasetPicker
+            options={options}
+            value={sessionId ? boundDatasetId : datasetId}
+            onChange={setDatasetId}
+            locked={Boolean(sessionId)}
+          />
         </header>
 
-        {/* Messages */}
-        <div className="flex-1 overflow-y-auto">
-          {allMessages.length === 0 ? (
-            <div className="flex h-full flex-col items-center justify-center px-4 text-center">
-              <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-accent/10 ring-1 ring-accent/15">
-                <svg
-                  className="h-5 w-5 text-accent"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  strokeWidth={1.5}
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z"
-                  />
-                </svg>
-              </div>
-              <h2 className="text-base font-medium">
-                tux<span className="text-accent">.ai</span>
-              </h2>
-              <p className="mt-2 max-w-[280px] text-sm leading-relaxed text-white/30">
-                Messages are tokenized before reaching the model. PII surfaces based on your access level.
-              </p>
-            </div>
-          ) : (
-            <div className="mx-auto max-w-2xl space-y-0.5 px-4 py-6">
-              {allMessages.map((msg, i) => (
-                <ChatMessage
-                  key={msg.id ?? i}
-                  role={msg.role}
-                  content={msg.content}
-                  streaming={streaming && i === allMessages.length - 1 && msg.role === "assistant"}
-                />
-              ))}
-              {error && (
-                <div className="rounded-xl border border-red-500/20 bg-red-500/8 px-4 py-3 text-sm text-red-300">
-                  {error}
-                </div>
-              )}
-              <div ref={bottomRef} />
-            </div>
-          )}
-        </div>
-
-        {/* Input */}
-        <div className="shrink-0 border-t border-white/6 px-4 py-4">
-          <div className="mx-auto max-w-2xl">
-            <div className="flex items-end gap-3 rounded-2xl border border-white/8 bg-surface-raised px-4 py-3 transition-all focus-within:border-accent/20 focus-within:ring-2 focus-within:ring-accent/5">
-              <textarea
-                ref={inputRef}
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder="Message tux.ai…"
-                rows={1}
-                className="flex-1 resize-none bg-transparent text-sm text-white/90 placeholder-white/20 outline-none"
-                style={{ maxHeight: "160px" }}
+        <div ref={scrollRef} onScroll={onScroll} className="flex-1 overflow-y-auto">
+          <div className="mx-auto w-full max-w-[780px] px-4 sm:px-6">
+            {empty ? (
+              <EmptyState
+                status={
+                  options === null
+                    ? "loading"
+                    : options.length === 0
+                      ? "none"
+                      : datasetName
+                        ? "ready"
+                        : "choose"
+                }
+                datasetName={datasetName}
               />
-              <button
-                onClick={handleSend}
-                disabled={!input.trim() || streaming || !canSend}
-                className="mb-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-accent text-black/70 transition-all hover:bg-accent-hover disabled:opacity-30"
-                title="Send"
-              >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  className="h-3.5 w-3.5"
-                  viewBox="0 0 20 20"
-                  fill="currentColor"
-                >
-                  <path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z" />
-                </svg>
-              </button>
-            </div>
-            <p className="mt-2 text-center text-xs text-white/15">
-              PII is automatically tokenized · Shift+Enter for new line
-            </p>
+            ) : (
+              <div className="py-6" aria-live="polite">
+                {historyLoading && (
+                  <div className="space-y-3 py-6 sm:pl-24">
+                    <div className="ghost-line w-1/2" />
+                    <div className="ghost-line w-5/6" />
+                    <div className="ghost-line w-2/3" />
+                  </div>
+                )}
+                {all.map((m, i) => (
+                  <ChatMessage
+                    key={m.id ?? i}
+                    role={m.role}
+                    content={m.content}
+                    live={i >= liveFrom}
+                    streaming={streaming && i === all.length - 1 && m.role === "assistant"}
+                  />
+                ))}
+                {error && (
+                  <div className="rise my-2 border-l-2 border-alert bg-alert-soft/60 py-2.5 pl-4 pr-3 text-sm text-alert sm:ml-24">
+                    The answer stopped: {error}. Send the question again.
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
-      </div>
+
+        <div className="shrink-0 pb-4 pt-2 sm:pb-5">
+          <div className="mx-auto w-full max-w-[780px] px-4 sm:px-6 sm:pl-[120px]">
+            <Composer
+              ref={composerRef}
+              streaming={streaming}
+              disabled={!sessionId && !datasetId}
+              disabledReason="Choose a dataset first"
+              placeholder={datasetName ? `Ask about ${datasetName}` : "Ask a question"}
+              onSend={handleSend}
+              onStop={stop}
+            />
+          </div>
+        </div>
+      </main>
+    </div>
+  );
+}
+
+type EmptyStatus = "loading" | "none" | "choose" | "ready";
+
+const EMPTY_HEADING: Record<EmptyStatus, string> = {
+  loading: "Ask about your records.",
+  none: "No dataset is ready yet.",
+  choose: "Choose a dataset to start.",
+  ready: "",
+};
+
+function EmptyState({ status, datasetName }: Readonly<{ status: EmptyStatus; datasetName?: string }>) {
+  return (
+    <div className="fade-in pb-10 pt-[14vh] sm:pl-24">
+      <h1 className="max-w-[26ch] text-2xl font-semibold tracking-[-0.015em] text-ink">
+        {status === "ready" ? `Ask about the records in ${datasetName}.` : EMPTY_HEADING[status]}
+      </h1>
+      <p className="mt-4 max-w-[60ch] text-base text-ink-2">
+        {status === "none" ? (
+          <>An admin must create a dataset and upload its key. Then it appears in the list above.</>
+        ) : (
+          <>
+            Names, numbers and other personal data in your question become tokens before the model
+            reads it. The answer shows the values that your role allows. Every other value stays
+            hidden, like this: <Redaction label="PERSON" hexid="3f9a1c2e70b4" />. Point at a bar to
+            see its token.
+          </>
+        )}
+      </p>
     </div>
   );
 }

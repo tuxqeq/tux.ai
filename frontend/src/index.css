@@ -2,33 +2,333 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * Motion rules for this UI
+ * - Motion answers an action (send, select, delete, create) or shows a state change (a value
+ *   becomes a token). Nothing moves on its own except the login demo, once, and the wait state.
+ * - Durations: 160–240 ms for controls, 280–420 ms for bars that are drawn on.
+ * - prefers-reduced-motion: every animation ends in its final state at once (bottom of file).
+ */
+
 @layer base {
   html {
-    @apply bg-surface text-white antialiased;
-    font-feature-settings: "ss01", "ss02", "cv01", "cv02";
+    @apply bg-paper font-sans text-ink antialiased;
+    font-size: 15px;
+    text-rendering: optimizeLegibility;
   }
 
-  * {
-    @apply box-border;
+  body {
+    @apply bg-paper;
+  }
+
+  ::selection {
+    @apply bg-ink text-sheet;
+  }
+
+  :focus-visible {
+    outline: 2px solid theme("colors.ink.DEFAULT");
+    outline-offset: 2px;
   }
 
   ::-webkit-scrollbar {
-    width: 4px;
+    width: 10px;
   }
-
   ::-webkit-scrollbar-track {
-    @apply bg-transparent;
+    background: transparent;
   }
-
   ::-webkit-scrollbar-thumb {
-    @apply rounded-full bg-white/10;
+    border: 3px solid transparent;
+    background-clip: padding-box;
+    border-radius: 999px;
+    background-color: theme("colors.rule.DEFAULT");
   }
-
   ::-webkit-scrollbar-thumb:hover {
-    @apply bg-white/20;
+    background-color: theme("colors.rule.strong");
+  }
+}
+
+@layer components {
+  /* ── Form controls ───────────────────────────────────────────────────────── */
+  .field {
+    @apply block w-full rounded-md border border-rule bg-sheet px-3 py-2 text-sm text-ink
+      placeholder:text-ink-3 transition-[border-color,box-shadow] duration-150;
+  }
+  .field:hover {
+    @apply border-rule-strong;
+  }
+  .field:focus {
+    @apply border-ink outline-none;
+    box-shadow: 0 0 0 3px rgb(29 32 38 / 0.1);
+  }
+  select.field {
+    @apply appearance-none pr-8;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5 6 7.5 9 4.5' fill='none' stroke='%231D2026' stroke-width='1.4'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    background-size: 12px;
+  }
+  .field-label {
+    @apply mb-1.5 block text-xs font-medium text-ink-2;
   }
 
-  textarea {
-    field-sizing: content;
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-md px-3.5 py-2 text-sm font-semibold
+      transition-[background-color,color,transform,opacity] duration-150 ease-out
+      active:translate-y-px disabled:pointer-events-none disabled:opacity-40;
+  }
+  .btn-ink {
+    @apply btn bg-ink text-sheet hover:bg-toner;
+  }
+  .btn-line {
+    @apply btn border border-rule-strong bg-transparent text-ink hover:border-ink hover:bg-sheet;
+  }
+  .btn-quiet {
+    @apply btn px-2 py-1.5 font-medium text-ink-2 hover:bg-ink/5 hover:text-ink;
+  }
+
+  /* ── Redaction bar: one PII token ─────────────────────────────────────────── */
+  .redact {
+    @apply relative inline-block whitespace-nowrap rounded-[2px] bg-toner font-type text-sheet;
+    font-size: 0.84em;
+    line-height: 1.35;
+    padding: 0.04em 0.42em 0.02em;
+    letter-spacing: 0.01em;
+    vertical-align: 0.04em;
+    -webkit-box-decoration-break: clone;
+    box-decoration-break: clone;
+  }
+  .redact[tabindex] {
+    cursor: help;
+  }
+  /* The token id slides out of the bar's right edge, over the next words, without reflowing
+     the line (a reflow could move the bar away from the pointer and make it flicker). */
+  .redact-id {
+    position: absolute;
+    z-index: 10;
+    top: 0;
+    bottom: 0;
+    left: calc(100% - 2px);
+    padding-right: 0.42em;
+    border-radius: 0 2px 2px 0;
+    background: theme("colors.toner");
+    color: #a9aeb5;
+    white-space: nowrap;
+    pointer-events: none;
+    clip-path: inset(0 100% 0 0);
+    transition: clip-path 300ms theme("transitionTimingFunction.out");
+  }
+  .redact:hover .redact-id,
+  .redact:focus-visible .redact-id {
+    clip-path: inset(0 0 0 0);
+  }
+  /* A token that just arrived in a streamed answer is drawn on, left to right. */
+  .redact[data-fresh] {
+    animation: ink-in 380ms theme("transitionTimingFunction.stroke") both;
+  }
+
+  /* Typewriter caret while the answer streams */
+  .caret {
+    display: inline-block;
+    width: 0.5em;
+    height: 1.1em;
+    margin-left: 2px;
+    vertical-align: -0.18em;
+    background: theme("colors.ink.DEFAULT");
+    animation: blink 1.05s step-end infinite;
+  }
+
+  /* Wait state: the answer's lines, still blacked out */
+  .ghost-line {
+    position: relative;
+    height: 11px;
+    overflow: hidden;
+    border-radius: 2px;
+    background: theme("colors.rule.DEFAULT");
+  }
+  .ghost-line::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, transparent, rgb(246 247 244 / 0.75), transparent);
+    transform: translateX(-100%);
+    animation: sweep 1.6s ease-in-out infinite;
+  }
+
+  /* Entrance for things the user just caused (a sent message, a reply starting) */
+  .rise {
+    animation: rise 340ms theme("transitionTimingFunction.out") both;
+  }
+
+  /* A row that was just created */
+  .row-new > * {
+    animation: row-flash 1.6s ease-out both;
+  }
+
+  /* Height collapse for removed list items: wrapper is a 1-row grid */
+  .collapse-row {
+    display: grid;
+    grid-template-rows: 1fr;
+    transition:
+      grid-template-rows 240ms theme("transitionTimingFunction.out"),
+      opacity 180ms ease-out;
+  }
+  .collapse-row > * {
+    min-height: 0;
+  }
+  .collapse-row[data-leaving] {
+    grid-template-rows: 0fr;
+    opacity: 0;
+  }
+  .collapse-row[data-leaving] > * {
+    overflow: hidden;
+  }
+
+  /* ── Login demo ────────────────────────────────────────────────────────────── */
+  .demo-pii {
+    position: relative;
+    display: inline-block;
+    white-space: nowrap;
+    /* detection: an underline is scanned under the span */
+    background-image: linear-gradient(theme("colors.ink.DEFAULT"), theme("colors.ink.DEFAULT"));
+    background-repeat: no-repeat;
+    background-position: 0 100%;
+    background-size: 0% 2px;
+    transition: background-size 420ms theme("transitionTimingFunction.stroke");
+  }
+  .demo-pii::before {
+    content: "";
+    position: absolute;
+    inset: 0.14em -0.04em 0.06em;
+    border-radius: 2px;
+    background: theme("colors.toner");
+    clip-path: inset(0 100% 0 0);
+    transition: clip-path 460ms theme("transitionTimingFunction.stroke");
+  }
+  .demo-pii > .demo-label {
+    position: absolute;
+    inset: 0.14em 0 0.06em;
+    display: flex;
+    align-items: center;
+    padding-left: 0.7em;
+    font-family: theme("fontFamily.type");
+    font-size: 0.42em;
+    letter-spacing: 0.03em;
+    color: theme("colors.sheet");
+    opacity: 0;
+    transform: translateY(0.2em);
+    transition:
+      opacity 260ms ease-out,
+      transform 260ms theme("transitionTimingFunction.out");
+  }
+  .demo-pii[data-stage="scan"] {
+    background-size: 100% 2px;
+  }
+  .demo-pii[data-stage="bar"] {
+    background-size: 100% 0;
+  }
+  .demo-pii[data-stage="bar"]::before {
+    clip-path: inset(0 0 0 0);
+  }
+  .demo-pii[data-stage="bar"] > .demo-label {
+    opacity: 1;
+    transform: none;
+    transition-delay: 300ms;
+  }
+
+  .fade-in {
+    animation: fade-in 500ms ease-out both;
+  }
+
+  /* a failed sign-in: the message nudges sideways once */
+  .shake {
+    animation: shake 380ms theme("transitionTimingFunction.out") both;
+  }
+}
+
+@keyframes shake {
+  0% {
+    opacity: 0;
+    transform: translateX(-6px);
+  }
+  35% {
+    opacity: 1;
+    transform: translateX(4px);
+  }
+  65% {
+    transform: translateX(-2px);
+  }
+  100% {
+    transform: none;
+  }
+}
+
+@keyframes ink-in {
+  from {
+    clip-path: inset(0 100% 0 0);
+  }
+  to {
+    clip-path: inset(0 0 0 0);
+  }
+}
+
+@keyframes blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+@keyframes sweep {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes row-flash {
+  from {
+    background-color: rgb(29 32 38 / 0.1);
+  }
+  to {
+    background-color: transparent;
+  }
+}
+
+@keyframes drain {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    transition-delay: 0ms !important;
+  }
+  /* keep the toast timer readable as a static bar */
+  .toast-timer {
+    animation: none !important;
   }
 }

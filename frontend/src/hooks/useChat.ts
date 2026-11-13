@@ -14,9 +14,11 @@ export interface UseChatOptions {
   sessionId: string;
   datasetId: string;
   onSessionCreated?: (id: string) => void;
+  /** Called when an answer has finished streaming (the chat list can refresh). */
+  onAnswerDone?: () => void;
 }
 
-export function useChat({ sessionId, datasetId, onSessionCreated }: UseChatOptions) {
+export function useChat({ sessionId, datasetId, onSessionCreated, onAnswerDone }: UseChatOptions) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -62,6 +64,7 @@ export function useChat({ sessionId, datasetId, onSessionCreated }: UseChatOptio
           if (newSessionId && onSessionCreated) {
             onSessionCreated(newSessionId);
           }
+          onAnswerDone?.();
         },
 
         onError(err) {
@@ -71,7 +74,7 @@ export function useChat({ sessionId, datasetId, onSessionCreated }: UseChatOptio
         },
       });
     },
-    [sessionId, datasetId, streaming, onSessionCreated]
+    [sessionId, datasetId, streaming, onSessionCreated, onAnswerDone]
   );
 
   const stop = useCallback(() => {

@@ -143,12 +143,30 @@ def _verify_label_mask(trainer, train_ds, logger: logging.Logger) -> None:
         sys.exit(1)
 
 
-def _save_model(model, tokenizer, output_dir: str, logger: logging.Logger) -> tuple[str, str]:
+def _trl_compat_kwargs(config_cls, max_seq_length: int) -> dict:
+    """TRL renamed SFTConfig.max_seq_length to max_length (0.20+)."""
+    import dataclasses
+    names = {f.name for f in dataclasses.fields(config_cls)}
+    key = "max_seq_length" if "max_seq_length" in names else "max_length"
+    return {key: max_seq_length}
+
+
+def _trainer_tokenizer_kwarg(trainer_cls, tokenizer) -> dict:
+    """Newer TRL takes processing_class= instead of tokenizer=."""
+    import inspect
+    params = inspect.signature(trainer_cls.__init__).parameters
+    return {"processing_class": tokenizer} if "processing_class" in params else {"tokenizer": tokenizer}
+
+
+def _save_model(model, tokenizer, output_dir: str, logger: logging.Logger,
+                merge: bool = True) -> tuple[str, str]:
     adapter_dir = os.path.join(output_dir, "adapter")
     merged_dir  = os.path.join(output_dir, "merged_16bit")
     logger.info(f"\nSaving LoRA adapter to {adapter_dir}")
     model.save_pretrained(adapter_dir)
     tokenizer.save_pretrained(adapter_dir)
+    if not merge:
+        return adapter_dir, ""
     logger.info(f"Saving merged 16-bit model to {merged_dir}")
     model.save_pretrained_merged(merged_dir, tokenizer, save_method="merged_16bit")
     return adapter_dir, merged_dir
@@ -176,6 +194,17 @@ def main() -> None:
     parser.add_argument("--seed",        type=int,   default=42)
     parser.add_argument("--wandb",       action="store_true",
                         help="Enable Weights & Biases logging")
+    parser.add_argument("--save-steps",  type=int,   default=200)
+    parser.add_argument("--eval-steps",  type=int,   default=200)
+    parser.add_argument("--save-total-limit", type=int, default=None)
+    parser.add_argument("--max-val",     type=int,   default=None,
+                        help="Use only the first N validation examples (faster eval).")
+    parser.add_argument("--group-by-length", action="store_true",
+                        help="Batch examples of similar length (less padding).")
+    parser.add_argument("--no-merge",    action="store_true",
+                        help="Save only the LoRA adapter, not the merged 16-bit model.")
+    parser.add_argument("--resume",      action="store_true",
+                        help="Continue from the last checkpoint in --output-dir.")
     args = parser.parse_args()
 
     logger = _setup_logging(args.output_dir)
@@ -246,7 +275,9 @@ def main() -> None:
     bf16_supported = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
     logger.info(f"\nbf16 supported: {bf16_supported}")
 
-    sft_config = SFTConfig(
+    if val_ds is not None and args.max_val:
+        val_ds = val_ds.select(range(min(args.max_val, len(val_ds))))
+    sft_config = SFTConfig(**_trl_compat_kwargs(SFTConfig, args.max_seq_length),
         output_dir=args.output_dir,
         num_train_epochs=args.epochs,
         per_device_train_batch_size=args.batch_size,
@@ -257,11 +288,12 @@ def main() -> None:
         bf16=bf16_supported,
         fp16=not bf16_supported,
         logging_steps=10,
-        save_steps=200,
-        eval_steps=200 if val_ds else None,
+        save_steps=args.save_steps,
+        save_total_limit=args.save_total_limit,
+        group_by_length=args.group_by_length,
+        eval_steps=args.eval_steps if val_ds else None,
         eval_strategy="steps" if val_ds else "no",
         seed=args.seed,
-        max_seq_length=args.max_seq_length,
         dataset_text_field="text",
         dataset_num_proc=2,
         packing=False,
@@ -270,7 +302,7 @@ def main() -> None:
 
     trainer = SFTTrainer(
         model=model,
-        tokenizer=tokenizer,
+        **_trainer_tokenizer_kwarg(SFTTrainer, tokenizer),
         train_dataset=train_ds,
         eval_dataset=val_ds,
         args=sft_config,
@@ -292,7 +324,9 @@ def main() -> None:
 
     # ── 7. Train ───────────────────────────────────────────────────────────────
     logger.info("\nStarting training...")
-    train_result = trainer.train()
+    has_ckpt = os.path.isdir(args.output_dir) and any(
+        d.startswith("checkpoint-") for d in os.listdir(args.output_dir))
+    train_result = trainer.train(resume_from_checkpoint=True if (args.resume and has_ckpt) else None)
     train_loss = train_result.training_loss
     logger.info(f"\nTraining complete. Final train loss: {train_loss:.4f}")
 
@@ -303,7 +337,8 @@ def main() -> None:
         logger.info(f"Final val loss: {val_loss:.4f}")
 
     # ── 8. Save ────────────────────────────────────────────────────────────────
-    adapter_dir, merged_dir = _save_model(model, tokenizer, args.output_dir, logger)
+    adapter_dir, merged_dir = _save_model(model, tokenizer, args.output_dir, logger,
+                                       merge=not args.no_merge)
 
     print("\n" + "=" * 60)
     print(f"  Final train loss : {train_loss:.4f}")

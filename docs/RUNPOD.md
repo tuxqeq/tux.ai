@@ -91,6 +91,30 @@ After a restart: `bash scripts/pod.sh`, then `bash scripts/pod_rag_setup.sh` wit
 `ADMIN_PASSWORD` again. It re-creates the dataset row with the same id; the token map and the index
 are reused.
 
+**Important:** RunPod can start a stopped pod only on the same host. If that host's GPU is taken,
+the pod does not start, and a pod volume cannot move to another pod (happened on 2026-11-13,
+D-30). Use a **network volume** (RunPod → Storage, same data center as the pod; the account needs
+at least $5 of credit to create one) for anything you want to keep across pods.
+
+## 7. Fine-tune vs RAG experiment (D-30)
+
+After sections 2–3 (services running, dataset and index built):
+
+```bash
+cd /workspace/tux.ai
+sh scripts/pod_ft_eval.sh ftenv        # unsloth venv on the container disk, ~6 min
+sh scripts/pod_ft_eval.sh data         # llm/data/qa_v2 + eval/llm_eval_set.jsonl
+nohup sh scripts/pod_ft_eval.sh train > /workspace/ft_train.log 2>&1 &   # ~1.5 h, RTX 4090
+sh scripts/pod_ft_eval.sh eval-base    # A0 and B; can run while the model trains
+sh scripts/pod_ft_eval.sh export       # after training: GGUF -> Ollama tux-ft-qa
+sh scripts/pod_ft_eval.sh eval-ft      # A and C
+sh scripts/pod_ft_eval.sh summary      # eval/results/summary.md
+```
+
+Checkpoints go to `/workspace/ft_runs/qa_v2` every 500 steps. If the pod stops, run `ftenv`
+again (the venv was on the container disk) and then `train`: it continues from the last
+checkpoint. Copy `eval/results/` to the Mac before you terminate the pod.
+
 ## Troubleshooting
 
 | Symptom | Cause / fix |

@@ -6,7 +6,7 @@
 #   HF_TOKEN=hf_... ADMIN_PASSWORD='...' bash scripts/pod_rag_setup.sh
 #
 # Env: HF_TOKEN        read access to the private repo tuxqeq/tux-ai-pii-detector (first run only)
-#      RAG_MODEL       Ollama model for the dataset's chats (default qwen3:4b)
+#      RAG_MODEL       Ollama model for the dataset's chats (default qwen3:4b-instruct-2507-q4_K_M; qwen3:4b is a thinking-only model, D-27)
 #      DOC_COUNT       synthetic documents (default 1000, seed 42)
 #      ADMIN_PASSWORD  new password for admin@tux.ai (the migration seeds "admin")
 set -euo pipefail
@@ -18,7 +18,7 @@ set -a; source .env.local; set +a
 export DATABASE_URL="postgresql+asyncpg://tuxai:tuxai@localhost:5432/tuxai"
 export REDIS_URL="redis://localhost:6379"
 export TOKENIZERS_PARALLELISM=false
-RAG_MODEL="${RAG_MODEL:-qwen3:4b}"
+RAG_MODEL="${RAG_MODEL:-qwen3:4b-instruct-2507-q4_K_M}"
 DOC_COUNT="${DOC_COUNT:-1000}"
 # sha256 of the frozen detector (D-19): models/pii_model_v4/model.safetensors on the training Mac
 V4_SHA256="5c54c13de6fe6b5a5a0f8770e3161e46d22c3ef2c97bb1d7dfd01f9fc076f67d"

@@ -1,0 +1,2 @@
+# built document (rebuild with: typst compile main.typ --font-path contents/assets/fonts)
+/main.pdf

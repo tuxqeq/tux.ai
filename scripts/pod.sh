@@ -87,7 +87,9 @@ echo "  ✓ Envoy started (gRPC-Web on :8080)"
 # ── Python venv ────────────────────────────────────────────────────────────────
 if [ ! -d .venv ]; then
     echo "[setup] Creating virtualenv..."
-    python3 -m venv .venv
+    # --system-site-packages: reuse the CUDA torch of the runpod/pytorch image instead of a
+    # second multi-GB download (the detector and the embeddings run on the CPU anyway)
+    python3 -m venv --system-site-packages .venv
 fi
 source .venv/bin/activate
 

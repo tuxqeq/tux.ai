@@ -10,7 +10,7 @@ the corpus and its token maps into the SAME Redis, and after `alembic upgrade he
      a map whose keyref fingerprint is not the fingerprint of --key-file stops the script
   3. Chroma (CHROMA_DB_PATH): collection ds_<dataset id> with the records and their sections
 
-  python scripts/bootstrap_dataset.py --name "Synthetic corpus v2" --model qwen3:4b
+  python scripts/bootstrap_dataset.py --name "Synthetic corpus v2" --model qwen3:4b-instruct-2507-q4_K_M
   python scripts/bootstrap_dataset.py --dataset-id <uuid> --reindex     # rebuild the index only
 
 Restart the API after a rebuild: Chroma's PersistentClient is not safe across processes.
@@ -180,7 +180,7 @@ def parse_args(argv=None):
     ap.add_argument("--dataset-id", default=None, help="use an existing dataset instead of creating one")
     ap.add_argument("--name", default="Synthetic corpus v2")
     ap.add_argument("--description", default="generate_synthetic_docs.py (seed 42), tokenized with detector v4")
-    ap.add_argument("--model", default="qwen3:4b",
+    ap.add_argument("--model", default="qwen3:4b-instruct-2507-q4_K_M",
                     help="Ollama model for this dataset's chats (Dataset.model_name); '' keeps the current one")
     ap.add_argument("--admin-email", default="admin@tux.ai")
     ap.add_argument("--redis-url", default=None)

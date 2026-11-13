@@ -21,7 +21,7 @@ D-19 (frozen detector v4), D-22 (corpus v2), D-23 (RAG), D-25 (deployment fixes)
 
 | Setting | Value |
 |---|---|
-| GPU | 24 GB (RTX 4090, RTX A5000 or L4). `qwen3:4b` needs ~4 GB; the rest leaves room for 8B/14B comparisons |
+| GPU | 24 GB (RTX 4090, RTX A5000 or L4). `qwen3:4b-instruct-2507-q4_K_M` needs ~4 GB; the rest leaves room for 8B/14B comparisons |
 | Template | RunPod PyTorch (Ubuntu 22.04, CUDA 12) |
 | Volume | 50 GB, mounted at `/workspace` |
 | Ports | **TCP 22 only** ("SSH over exposed TCP"). Do not expose 3000/8000/8080 as HTTP ports |
@@ -50,7 +50,7 @@ cd /workspace/tux.ai
 HF_TOKEN=hf_xxx ADMIN_PASSWORD='choose-one' bash scripts/pod_rag_setup.sh
 ```
 
-It downloads detector v4 and checks its sha256, pulls `qwen3:4b`, generates 1000 documents
+It downloads detector v4 and checks its sha256, pulls `qwen3:4b-instruct-2507-q4_K_M` (not `qwen3:4b`: that tag is the thinking-only 2507 model, its reasoning lands in the answer), generates 1000 documents
 (seed 42), tokenizes them (random 32-byte key in `llm/data/dataset_key.b64`, raw files deleted),
 creates the dataset, copies the token map, builds the Chroma index and sets the admin password.
 Expect 5–15 minutes; tokenization runs on the CPU.
@@ -99,5 +99,5 @@ are reused.
 | `prepare_corpus.py`: `N file(s) failed` | raw files are kept in `llm/data/raw_temp`; fix the error and run again |
 | `/api/health` says `presidio-only` | `models/pii_model_v4/model.safetensors` is missing |
 | chat shows `HTTP 404` | the frontend must run through `vite preview` (pod.sh does this), not a plain static server |
-| Ollama: model not found | `ollama pull qwen3:4b`; the dataset's model is `Dataset.model_name` |
+| Ollama: model not found | `ollama pull qwen3:4b-instruct-2507-q4_K_M`; the dataset's model is `Dataset.model_name` |
 | `tux-ai-chat not found` warning | expected: that fine-tuned model was trained on the old corpus (old key, old token ids) and cannot answer about corpus v2 |

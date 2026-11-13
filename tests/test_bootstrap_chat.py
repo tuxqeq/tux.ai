@@ -63,7 +63,7 @@ async def run():
     from api.security import decrypt_aes_key
     async with AsyncSessionLocal() as db:
         ds = await db.get(M.Dataset, ds_id)
-        assert ds.model_name == "qwen3:4b" and ds.rdb_imported and ds.created_by is not None
+        assert ds.model_name == "qwen3:4b-instruct-2507-q4_K_M" and ds.rdb_imported and ds.created_by is not None
         ek = (await db.execute(select(M.EncryptionKey).where(M.EncryptionKey.dataset_id == ds_id))).scalars().all()
         assert len(ek) == 1 and decrypt_aes_key(ek[0].encrypted_key) == key
     dsmap = fr.hgetall(f"ds:{ds_id}:tokenmap")
@@ -131,7 +131,7 @@ async def run():
         message = q; chat_session_id = ""; dataset_id = str(ds_id); auth_token = ""
     out = [c async for c in CS.ChatServicer().StreamChat(Req(), Ctx())]
     msgs = captured["messages"]
-    assert captured["model"] == "qwen3:4b"
+    assert captured["model"] == "qwen3:4b-instruct-2507-q4_K_M"
     assert msgs[0]["role"] == "system" and hits[0]["text"] in msgs[0]["content"], msgs[0]["content"][:300]
     assert msgs[-1] == {"role": "user", "content": qtok}, msgs[-1]
     assert name not in msgs[0]["content"] and name not in msgs[-1]["content"]   # no plaintext reaches the LLM

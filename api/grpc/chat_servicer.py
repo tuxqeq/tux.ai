@@ -12,6 +12,7 @@ Handles the StreamChat RPC:
   8. Persist messages to PostgreSQL (tokenized, never plaintext)
 """
 import asyncio
+import hmac
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -41,6 +42,31 @@ except ImportError:
     chat_pb2_grpc = None
 
 logger = logging.getLogger("tuxai")
+
+
+def _token_from_metadata(metadata: dict, request_token: str = "") -> str:
+    """JWT for this call: a Bearer header, the request field, or the browser's cookie.
+
+    The web client (gRPC-Web through Envoy) cannot read the httpOnly `access_token` cookie that
+    /api/auth/login sets, so it sends `auth_token=""` and the cookie arrives as `cookie` metadata.
+    Before 2026-11-13 the servicer ignored that cookie, so every chat from the UI was rejected as
+    UNAUTHENTICATED. The cookie is accepted only with the double-submit CSRF header that the
+    client already sends (`x-csrf-token` == `csrf_token` cookie).
+    """
+    auth = metadata.get("authorization", "")
+    if auth.startswith("Bearer ") and auth[7:]:
+        return auth[7:]
+    if request_token:
+        return request_token
+    cookies = {}
+    for part in metadata.get("cookie", "").split(";"):
+        name, _, value = part.strip().partition("=")
+        if name:
+            cookies[name] = value
+    token, csrf = cookies.get("access_token", ""), cookies.get("csrf_token", "")
+    if token and csrf and hmac.compare_digest(metadata.get("x-csrf-token", ""), csrf):
+        return token
+    return ""
 
 
 async def _get_user(token: str, db: AsyncSession) -> User | None:
@@ -84,7 +110,7 @@ class ChatServicer:
 
         # Extract auth token from gRPC metadata (preferred) or request field (fallback)
         metadata = dict(context.invocation_metadata())
-        token = metadata.get("authorization", "").replace("Bearer ", "") or request.auth_token
+        token = _token_from_metadata(metadata, request.auth_token)
 
         async with AsyncSessionLocal() as db:
             user = await _get_user(token, db)
